@@ -8,18 +8,21 @@ Pure-Python (standard library only) JSON API for the Govardhan Electricals site.
 server.py                    HTTP layer only: routing, request/response, CORS
 services/
   auth_service.py            register, login, sessions, OTP password reset
+  company_service.py         companies, and each user's membership/role in them
   contact_service.py         contact-form enquiries
 supabase.py                  minimal Supabase (PostgREST) client
 otp.py                       sends the "verification code" template webhook
 security.py                  password hashing, tokens, time helpers
 config.py                    env-driven settings (host, port, CORS, TTLs)
 errors.py                    ApiError, shared by server.py and services/
-db.sql                       run once in Supabase's SQL Editor
+db.sql                       full schema — run once in Supabase's SQL Editor for a fresh project
+migrations/
+  001_companies.sql          adds companies + company_members onto an existing database
 ```
 
 ## Setup
 
-1. Supabase Dashboard -> **SQL Editor** -> paste and run [db.sql](db.sql) (creates `users`, `sessions`, `tokens`, `otp_records`, `enquiries`).
+1. Supabase Dashboard -> **SQL Editor** -> paste and run [db.sql](db.sql) (creates `users`, `sessions`, `tokens`, `otp_records`, `companies`, `company_members`, `enquiries`). If you already ran an earlier version of this file, just run it again — every statement is `create table if not exists` / `create index if not exists`, so it only adds what's missing (the new `companies` and `company_members` tables) and won't touch existing data.
 2. In [supabase.py](supabase.py) set `SECRET_KEY` to your Supabase **secret / service_role** key (Project Settings -> API Keys), or set the `SUPABASE_SERVICE_KEY` environment variable. The publishable key alone cannot write to the private tables (Row Level Security) — `python server.py`'s startup line tells you which key type it's using.
 3. Run:
 
@@ -54,6 +57,11 @@ For a frontend hosted on Vercel, the API must be served over **HTTPS** — brows
 | POST   | `/api/verify-otp`       | `identifier, otp`                                  | returns a 15-minute `reset_token` |
 | POST   | `/api/reset-password`   | `reset_token, new_password`                        | logs the user out everywhere     |
 | POST   | `/api/contact`          | `name, phone, message, email?`                     | saved to `enquiries`             |
+| POST   | `/api/companies`        | `name`                                             | creates a company; creator becomes its `owner`. `Authorization: Bearer <token>` |
+| GET    | `/api/companies`        | —                                                   | lists the companies the current user belongs to, with their role. `Authorization: Bearer <token>` |
+| POST   | `/api/companies/members`| `company_id, identifier, role?="member"`           | adds an existing user (by username or number) to a company; caller must be `owner`/`admin` of it. `Authorization: Bearer <token>` |
+
+**Companies:** a user can belong to multiple companies, and a company can have multiple users — `company_members` is the many-to-many join table, with a `role` (`owner`/`admin`/`member`) per membership. The user who creates a company is automatically its `owner`.
 
 OTP: 6 digits, valid 10 minutes, 5 attempts, 60 s between requests. Only hashes of OTPs and tokens are stored, never the raw values.
 

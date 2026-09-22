@@ -14,6 +14,9 @@ Endpoints (JSON):
   POST /api/verify-otp       {identifier, otp}              -> {reset_token}
   POST /api/reset-password   {reset_token, new_password}
   POST /api/contact          {name, phone, message, email?}
+  POST /api/companies                {name}                              Bearer token
+  GET  /api/companies                —                                   Bearer token
+  POST /api/companies/members        {company_id, identifier, role?}     Bearer token
 """
 import json
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -22,7 +25,7 @@ from urllib.parse import urlparse
 import supabase
 from config import ALLOWED_ORIGINS, HOST, PORT
 from errors import ApiError
-from services import auth_service, contact_service
+from services import auth_service, company_service, contact_service
 from supabase import SupabaseError
 
 
@@ -90,6 +93,9 @@ class Handler(BaseHTTPRequestHandler):
             ("POST", "/api/verify-otp"): self.verify_otp,
             ("POST", "/api/reset-password"): self.reset_password,
             ("POST", "/api/contact"): self.contact,
+            ("POST", "/api/companies"): self.create_company,
+            ("GET", "/api/companies"): self.list_companies,
+            ("POST", "/api/companies/members"): self.add_company_member,
         }
         try:
             handler = routes.get((method, self.path.split("?")[0].rstrip("/")))
@@ -167,6 +173,21 @@ class Handler(BaseHTTPRequestHandler):
         d = self._json()
         contact_service.submit(d.get("name"), d.get("phone"), d.get("email"), d.get("message"))
         return 201, {"ok": True}
+
+    def create_company(self):
+        user, _ = auth_service.authenticate(self._bearer())
+        company = company_service.create(user["id"], self._json().get("name"))
+        return 201, {"company": company}
+
+    def list_companies(self):
+        user, _ = auth_service.authenticate(self._bearer())
+        return 200, {"companies": company_service.list_for_user(user["id"])}
+
+    def add_company_member(self):
+        user, _ = auth_service.authenticate(self._bearer())
+        d = self._json()
+        result = company_service.add_member(user["id"], d.get("company_id"), d.get("identifier"), d.get("role", "member"))
+        return 201, result
 
 
 if __name__ == "__main__":
