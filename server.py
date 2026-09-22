@@ -371,7 +371,8 @@ class Handler(BaseHTTPRequestHandler):
         customer = customer_service.create(
             user["id"], d.get("company_id"),
             name=d.get("name"), number=d.get("number"), email=d.get("email"),
-            gstin=d.get("gstin"), address=d.get("address"), metadata=d.get("metadata"),
+            gstin=d.get("gstin"), address=d.get("address"),
+            default_discount_percent=d.get("default_discount_percent"), metadata=d.get("metadata"),
         )
         return 201, {"customer": customer}
 
@@ -386,7 +387,8 @@ class Handler(BaseHTTPRequestHandler):
         customer = customer_service.update(
             user["id"], d.get("company_id"), d.get("id"),
             name=d.get("name"), number=d.get("number"), email=d.get("email"),
-            gstin=d.get("gstin"), address=d.get("address"), metadata=d.get("metadata"),
+            gstin=d.get("gstin"), address=d.get("address"),
+            default_discount_percent=d.get("default_discount_percent"), metadata=d.get("metadata"),
         )
         return 200, {"customer": customer}
 

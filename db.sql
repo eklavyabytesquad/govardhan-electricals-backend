@@ -222,8 +222,14 @@ create table if not exists public.invoice_items (
     unit              text        not null default 'Nos',
     unit_price        numeric(12,2) not null default 0,
     discount_percent  numeric(5,2)  not null default 0,
-    tax_rate          numeric(5,2)  not null default 0,
-    tax_amount        numeric(12,2) not null default 0,
+    cgst_rate         numeric(5,2)  not null default 0,
+    sgst_rate         numeric(5,2)  not null default 0,
+    igst_rate         numeric(5,2)  not null default 0,
+    cgst_amount       numeric(12,2) not null default 0,
+    sgst_amount       numeric(12,2) not null default 0,
+    igst_amount       numeric(12,2) not null default 0,
+    tax_rate          numeric(5,2)  not null default 0,  -- cgst_rate + sgst_rate + igst_rate, kept for display/back-compat
+    tax_amount        numeric(12,2) not null default 0,  -- cgst_amount + sgst_amount + igst_amount
     line_total        numeric(12,2) not null default 0,
     sort_order        integer     not null default 0,
     created_at        timestamptz not null default now()
@@ -303,6 +309,7 @@ create table if not exists public.customers (
     email       text,
     gstin       text,
     address     text,
+    default_discount_percent numeric(5,2) not null default 0,  -- auto-fills invoice line items when this customer is picked
     metadata    jsonb       not null default '{}'::jsonb,
     created_by  uuid        not null references public.users(id) on delete restrict,
     updated_by  uuid        references public.users(id) on delete set null,

@@ -6,10 +6,19 @@ import supabase
 from errors import ApiError
 from services.company_service import require_manager, require_member
 
-COLS = "id,company_id,name,number,email,gstin,address,metadata,created_at,updated_at"
+COLS = "id,company_id,name,number,email,gstin,address,default_discount_percent,metadata,created_at,updated_at"
 
 
-def _clean(name, number=None, email=None, gstin=None, address=None, metadata=None):
+def _num(value, default=0):
+    if value in (None, ""):
+        return default
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        raise ApiError(400, "Invalid number")
+
+
+def _clean(name, number=None, email=None, gstin=None, address=None, default_discount_percent=None, metadata=None):
     name = str(name or "").strip()
     if not name:
         raise ApiError(400, "Customer name is required")
@@ -30,6 +39,12 @@ def _clean(name, number=None, email=None, gstin=None, address=None, metadata=Non
     address = str(address or "").strip()
     if address:
         payload["address"] = address
+
+    if default_discount_percent is not None:
+        discount = _num(default_discount_percent)
+        if not (0 <= discount <= 100):
+            raise ApiError(400, "Discount must be between 0 and 100")
+        payload["default_discount_percent"] = discount
 
     if metadata is not None:
         if not isinstance(metadata, dict):

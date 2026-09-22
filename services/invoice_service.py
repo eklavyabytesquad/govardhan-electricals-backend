@@ -16,8 +16,9 @@ INVOICE_COLS = (
     "created_by,updated_by,created_at,updated_at"
 )
 ITEM_COLS = (
-    "id,invoice_id,inventory_id,description,hsn_code,quantity,unit,unit_price,"
-    "discount_percent,tax_rate,tax_amount,line_total,sort_order"
+    "id,invoice_id,inventory_id,description,hsn_code,quantity,unit,unit_price,discount_percent,"
+    "cgst_rate,sgst_rate,igst_rate,cgst_amount,sgst_amount,igst_amount,"
+    "tax_rate,tax_amount,line_total,sort_order"
 )
 STATUSES = ("draft", "sent", "paid", "partially_paid", "overdue", "cancelled")
 
@@ -32,7 +33,10 @@ def _num(value, default=0):
 
 
 def _compute_items(items):
-    """Validates line items and computes each one's tax_amount/line_total, plus invoice totals."""
+    """Validates line items and computes each one's CGST/SGST/IGST amounts (set
+    per item, not derived from a single invoice-wide state comparison), plus
+    invoice totals. tax_rate/tax_amount are kept as the sum of the three, for
+    anything that just wants "total tax on this line"."""
     if not items:
         raise ApiError(400, "At least one line item is required")
     cleaned, subtotal, tax_total, discount_total = [], 0.0, 0.0, 0.0
@@ -43,12 +47,17 @@ def _compute_items(items):
         qty = _num(it.get("quantity"), 1)
         unit_price = _num(it.get("unit_price"))
         discount_percent = _num(it.get("discount_percent"))
-        tax_rate = _num(it.get("tax_rate"))
+        cgst_rate = _num(it.get("cgst_rate"))
+        sgst_rate = _num(it.get("sgst_rate"))
+        igst_rate = _num(it.get("igst_rate"))
 
         gross = qty * unit_price
         discount_amount = gross * (discount_percent / 100)
         taxable = gross - discount_amount
-        tax_amount = taxable * (tax_rate / 100)
+        cgst_amount = taxable * (cgst_rate / 100)
+        sgst_amount = taxable * (sgst_rate / 100)
+        igst_amount = taxable * (igst_rate / 100)
+        tax_amount = cgst_amount + sgst_amount + igst_amount
         line_total = taxable + tax_amount
 
         subtotal += gross
@@ -63,7 +72,13 @@ def _compute_items(items):
             "unit": str(it.get("unit") or "Nos"),
             "unit_price": unit_price,
             "discount_percent": discount_percent,
-            "tax_rate": tax_rate,
+            "cgst_rate": cgst_rate,
+            "sgst_rate": sgst_rate,
+            "igst_rate": igst_rate,
+            "cgst_amount": round(cgst_amount, 2),
+            "sgst_amount": round(sgst_amount, 2),
+            "igst_amount": round(igst_amount, 2),
+            "tax_rate": round(cgst_rate + sgst_rate + igst_rate, 2),
             "tax_amount": round(tax_amount, 2),
             "line_total": round(line_total, 2),
             "sort_order": i,
