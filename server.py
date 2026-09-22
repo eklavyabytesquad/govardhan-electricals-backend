@@ -17,8 +17,9 @@ Endpoints (JSON):
   POST /api/companies                {name, gstin?, owner_name?, number?, metadata?}  Bearer token
   GET  /api/companies                —                                   Bearer token
   POST /api/companies/members        {company_id, identifier, role?}     Bearer token
+  POST /api/companies/update         {company_id, name?, gstin?, owner_name?, number?, metadata?}  Bearer token, owner/admin only
 
-  POST /api/inventory                {company_id, name, sku?, hsn_code?, unit?, price?, tax_rate?, ...}  Bearer token
+  POST /api/inventory                {company_id, name, sku?, hsn_code?, unit?, price?, tax_rate?, image_url?, ...}  Bearer token
   GET  /api/inventory?company_id=    —                                                                    Bearer token
   POST /api/inventory/update         {id, company_id, name, ...}                                          Bearer token
   POST /api/inventory/delete         {id, company_id}                                                     Bearer token
@@ -32,7 +33,18 @@ Endpoints (JSON):
   POST /api/invoices                 {company_id, customer_name, items:[...], series_id? | invoice_number?, ...}  Bearer token
   GET  /api/invoices?company_id=&status=   —                                                                       Bearer token
   GET  /api/invoices/get?company_id=&id=   —                                                                       Bearer token
+  POST /api/invoices/update          {company_id, id, customer_name, items:[...], ...}                            Bearer token — full edit, number/status unchanged
   POST /api/invoices/status          {company_id, id, status, amount_paid?}                                       Bearer token
+  GET  /api/invoices/search?company_id=&q=&date_from=&date_to=&min_amount=&max_amount=                            Bearer token
+
+  POST /api/customers                {company_id, name, number?, email?, gstin?, address?}  Bearer token
+  GET  /api/customers?company_id=    —                                                       Bearer token
+  POST /api/customers/update         {id, company_id, name, ...}                             Bearer token
+  POST /api/customers/delete         {id, company_id}                                         Bearer token
+
+  POST /api/units                    {company_id, name, abbreviation?}  Bearer token
+  GET  /api/units?company_id=        —                                  Bearer token
+  POST /api/units/delete             {id, company_id}                   Bearer token
 """
 import json
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -42,8 +54,8 @@ import supabase
 from config import ALLOWED_ORIGINS, HOST, PORT
 from errors import ApiError
 from services import (
-    auth_service, company_service, contact_service,
-    invoice_config_service, invoice_service, inventory_service, series_service,
+    auth_service, company_service, contact_service, customer_service,
+    invoice_config_service, invoice_service, inventory_service, series_service, units_service,
 )
 from supabase import SupabaseError
 
@@ -118,6 +130,7 @@ class Handler(BaseHTTPRequestHandler):
             ("POST", "/api/companies"): self.create_company,
             ("GET", "/api/companies"): self.list_companies,
             ("POST", "/api/companies/members"): self.add_company_member,
+            ("POST", "/api/companies/update"): self.update_company,
             ("POST", "/api/inventory"): self.create_inventory,
             ("GET", "/api/inventory"): self.list_inventory,
             ("POST", "/api/inventory/update"): self.update_inventory,
@@ -130,6 +143,15 @@ class Handler(BaseHTTPRequestHandler):
             ("GET", "/api/invoices"): self.list_invoices,
             ("GET", "/api/invoices/get"): self.get_invoice,
             ("POST", "/api/invoices/status"): self.update_invoice_status,
+            ("POST", "/api/invoices/update"): self.update_invoice,
+            ("GET", "/api/invoices/search"): self.search_invoices,
+            ("POST", "/api/customers"): self.create_customer,
+            ("GET", "/api/customers"): self.list_customers,
+            ("POST", "/api/customers/update"): self.update_customer,
+            ("POST", "/api/customers/delete"): self.delete_customer,
+            ("POST", "/api/units"): self.create_unit,
+            ("GET", "/api/units"): self.list_units,
+            ("POST", "/api/units/delete"): self.delete_unit,
         }
         try:
             handler = routes.get((method, self.path.split("?")[0].rstrip("/")))
@@ -220,6 +242,15 @@ class Handler(BaseHTTPRequestHandler):
         user, _ = auth_service.authenticate(self._bearer())
         return 200, {"companies": company_service.list_for_user(user["id"])}
 
+    def update_company(self):
+        user, _ = auth_service.authenticate(self._bearer())
+        d = self._json()
+        company = company_service.update(
+            user["id"], d.get("company_id"), d.get("name"), d.get("gstin"), d.get("owner_name"),
+            d.get("number"), d.get("metadata"),
+        )
+        return 200, {"company": company}
+
     def add_company_member(self):
         user, _ = auth_service.authenticate(self._bearer())
         d = self._json()
@@ -236,6 +267,7 @@ class Handler(BaseHTTPRequestHandler):
             hsn_code=d.get("hsn_code"), unit=d.get("unit"), price=d.get("price"),
             tax_rate=d.get("tax_rate"), stock_quantity=d.get("stock_quantity"),
             reorder_level=d.get("reorder_level"), category=d.get("category"), metadata=d.get("metadata"),
+            image_url=d.get("image_url"),
         )
         return 201, {"item": item}
 
@@ -253,6 +285,7 @@ class Handler(BaseHTTPRequestHandler):
             hsn_code=d.get("hsn_code"), unit=d.get("unit"), price=d.get("price"),
             tax_rate=d.get("tax_rate"), stock_quantity=d.get("stock_quantity"),
             reorder_level=d.get("reorder_level"), category=d.get("category"), metadata=d.get("metadata"),
+            image_url=d.get("image_url"),
         )
         return 200, {"item": item}
 
@@ -308,6 +341,12 @@ class Handler(BaseHTTPRequestHandler):
         invoice = invoice_service.get_one(user["id"], q.get("company_id", ""), q.get("id", ""))
         return 200, {"invoice": invoice}
 
+    def update_invoice(self):
+        user, _ = auth_service.authenticate(self._bearer())
+        d = self._json()
+        invoice = invoice_service.update(user["id"], d.get("company_id"), d.get("id"), d)
+        return 200, {"invoice": invoice}
+
     def update_invoice_status(self):
         user, _ = auth_service.authenticate(self._bearer())
         d = self._json()
@@ -315,6 +354,65 @@ class Handler(BaseHTTPRequestHandler):
             user["id"], d.get("company_id"), d.get("id"), d.get("status"), d.get("amount_paid"),
         )
         return 200, {"invoice": invoice}
+
+    def search_invoices(self):
+        user, _ = auth_service.authenticate(self._bearer())
+        q = self._query()
+        results = invoice_service.search(
+            user["id"], q.get("company_id", ""), q.get("q"), q.get("date_from"), q.get("date_to"),
+            q.get("min_amount"), q.get("max_amount"),
+        )
+        return 200, {"invoices": results}
+
+    # -- customers
+    def create_customer(self):
+        user, _ = auth_service.authenticate(self._bearer())
+        d = self._json()
+        customer = customer_service.create(
+            user["id"], d.get("company_id"),
+            name=d.get("name"), number=d.get("number"), email=d.get("email"),
+            gstin=d.get("gstin"), address=d.get("address"), metadata=d.get("metadata"),
+        )
+        return 201, {"customer": customer}
+
+    def list_customers(self):
+        user, _ = auth_service.authenticate(self._bearer())
+        company_id = self._query().get("company_id", "")
+        return 200, {"customers": customer_service.list_for_company(user["id"], company_id)}
+
+    def update_customer(self):
+        user, _ = auth_service.authenticate(self._bearer())
+        d = self._json()
+        customer = customer_service.update(
+            user["id"], d.get("company_id"), d.get("id"),
+            name=d.get("name"), number=d.get("number"), email=d.get("email"),
+            gstin=d.get("gstin"), address=d.get("address"), metadata=d.get("metadata"),
+        )
+        return 200, {"customer": customer}
+
+    def delete_customer(self):
+        user, _ = auth_service.authenticate(self._bearer())
+        d = self._json()
+        customer_service.delete(user["id"], d.get("company_id"), d.get("id"))
+        return 200, {"ok": True}
+
+    # -- units
+    def create_unit(self):
+        user, _ = auth_service.authenticate(self._bearer())
+        d = self._json()
+        unit = units_service.create(user["id"], d.get("company_id"), d.get("name"), d.get("abbreviation"))
+        return 201, {"unit": unit}
+
+    def list_units(self):
+        user, _ = auth_service.authenticate(self._bearer())
+        company_id = self._query().get("company_id", "")
+        return 200, {"units": units_service.list_for_company(user["id"], company_id)}
+
+    def delete_unit(self):
+        user, _ = auth_service.authenticate(self._bearer())
+        d = self._json()
+        units_service.delete(user["id"], d.get("company_id"), d.get("id"))
+        return 200, {"ok": True}
 
 
 if __name__ == "__main__":

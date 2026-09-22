@@ -60,7 +60,34 @@ def create(user_id, name, gstin=None, owner_name=None, number=None, metadata=Non
     payload = {"name": name, "created_by": user_id, **_clean_details(gstin, owner_name, number, metadata)}
     company = supabase.insert("companies", payload)
     supabase.insert("company_members", {"company_id": company["id"], "user_id": user_id, "role": "owner"})
+
+    try:
+        from services.units_service import seed_defaults  # local import: avoids a circular import at module load time
+        seed_defaults(company["id"], user_id)
+    except Exception as e:  # noqa: BLE001 — must never break company creation, e.g. if migrations/006 hasn't run yet
+        print("Warning: could not seed default units (run migrations/006_customers_units_inventory_image.sql):", e)
+
     return {**company, "role": "owner"}
+
+
+def update(user_id, company_id, name=None, gstin=None, owner_name=None, number=None, metadata=None):
+    """Edit an existing company's details. Only an owner/admin may do this — see
+    require_manager. There is deliberately no delete()."""
+    require_manager(user_id, company_id)
+    company_id = str(company_id or "")
+
+    payload = _clean_details(gstin, owner_name, number, metadata)
+    if name is not None:
+        name = str(name).strip()
+        if not name:
+            raise ApiError(400, "Company name is required")
+        payload["name"] = name
+    payload["updated_by"] = user_id
+
+    rows = supabase.update("companies", {"id": f"eq.{company_id}"}, payload)
+    if not rows:
+        raise ApiError(404, "Company not found")
+    return rows[0]
 
 
 def list_for_user(user_id):

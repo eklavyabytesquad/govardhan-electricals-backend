@@ -129,6 +129,51 @@ def create(user_id, company_id, data):
     return {**invoice, "items": saved_items}
 
 
+def update(user_id, company_id, invoice_id, data):
+    """Full edit: customer details, dates, notes/terms and line items (replaced
+    wholesale, then totals recomputed). invoice_number/series_id/status are
+    deliberately not editable here — number changes would break series
+    integrity, and status has its own endpoint (update_status)."""
+    require_manager(user_id, company_id)
+    invoice_id = str(invoice_id or "")
+    if not invoice_id:
+        raise ApiError(400, "id is required")
+
+    existing = supabase.select("invoices", {"id": f"eq.{invoice_id}", "company_id": f"eq.{company_id}"}, "id", 1)
+    if not existing:
+        raise ApiError(404, "Invoice not found")
+
+    customer_name = str(data.get("customer_name") or "").strip()
+    if not customer_name:
+        raise ApiError(400, "Customer name is required")
+
+    items, totals = _compute_items(data.get("items"))
+
+    payload = {
+        "customer_name": customer_name,
+        "customer_gstin": str(data.get("customer_gstin") or "").strip() or None,
+        "customer_phone": str(data.get("customer_phone") or "").strip() or None,
+        "customer_email": str(data.get("customer_email") or "").strip() or None,
+        "customer_address": str(data.get("customer_address") or "").strip() or None,
+        "due_date": data.get("due_date") or None,
+        "notes": str(data.get("notes") or "").strip() or None,
+        "terms": str(data.get("terms") or "").strip() or None,
+        "updated_by": user_id,
+        **totals,
+    }
+    if data.get("invoice_date"):
+        payload["invoice_date"] = data.get("invoice_date")
+
+    invoice = supabase.update("invoices", {"id": f"eq.{invoice_id}"}, payload)[0]
+
+    supabase.delete("invoice_items", {"invoice_id": f"eq.{invoice_id}"})
+    for it in items:
+        it["invoice_id"] = invoice_id
+    saved_items = supabase.insert_many("invoice_items", items)
+
+    return {**invoice, "items": saved_items}
+
+
 def list_for_company(user_id, company_id, status=None):
     require_member(user_id, company_id)
     filters = {"company_id": f"eq.{company_id}"}
@@ -145,6 +190,22 @@ def get_one(user_id, company_id, invoice_id):
         raise ApiError(404, "Invoice not found")
     items = supabase.select("invoice_items", {"invoice_id": f"eq.{invoice_id}"}, ITEM_COLS, order="sort_order.asc")
     return {**rows[0], "items": items}
+
+
+def search(user_id, company_id, query=None, date_from=None, date_to=None, min_amount=None, max_amount=None):
+    """Matches invoice number, customer name, or any line-item description,
+    plus optional date/amount ranges — always scoped to this company (see
+    search_invoices() in migrations/005_invoice_search.sql)."""
+    require_member(user_id, company_id)
+    params = {
+        "p_company_id": company_id,
+        "p_query": query or None,
+        "p_date_from": date_from or None,
+        "p_date_to": date_to or None,
+        "p_min_amount": _num(min_amount) if min_amount not in (None, "") else None,
+        "p_max_amount": _num(max_amount) if max_amount not in (None, "") else None,
+    }
+    return supabase.rpc("search_invoices", params)
 
 
 def update_status(user_id, company_id, invoice_id, status, amount_paid=None):

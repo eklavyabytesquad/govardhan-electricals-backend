@@ -5,7 +5,7 @@ from services.company_service import require_manager, require_member
 
 COLS = (
     "id,company_id,sku,name,description,hsn_code,unit,price,tax_rate,"
-    "stock_quantity,reorder_level,category,metadata,created_at,updated_at"
+    "stock_quantity,reorder_level,category,image_url,metadata,created_at,updated_at"
 )
 
 
@@ -19,7 +19,7 @@ def _num(value, default=0):
 
 
 def _clean(name, sku=None, description=None, hsn_code=None, unit=None, price=None,
-           tax_rate=None, stock_quantity=None, reorder_level=None, category=None, metadata=None):
+           tax_rate=None, stock_quantity=None, reorder_level=None, category=None, metadata=None, image_url=None):
     name = str(name or "").strip()
     if not name:
         raise ApiError(400, "Item name is required")
@@ -34,6 +34,7 @@ def _clean(name, sku=None, description=None, hsn_code=None, unit=None, price=Non
         "stock_quantity": _num(stock_quantity),
         "reorder_level": _num(reorder_level),
         "category": str(category or "").strip() or None,
+        "image_url": str(image_url or "").strip() or None,
     }
     if metadata is not None:
         if not isinstance(metadata, dict):

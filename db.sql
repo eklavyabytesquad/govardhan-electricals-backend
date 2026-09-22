@@ -161,6 +161,7 @@ create table if not exists public.inventory (
     stock_quantity  numeric(12,2) not null default 0,
     reorder_level   numeric(12,2) not null default 0,
     category        text,
+    image_url       text,
     metadata        jsonb       not null default '{}'::jsonb,
     created_by      uuid        not null references public.users(id) on delete restrict,
     updated_by      uuid        references public.users(id) on delete set null,
@@ -259,6 +260,70 @@ begin
 end;
 $$;
 
+-- ============ invoice search ============
+-- Matches invoice number, customer name, and line-item descriptions (a join
+-- PostgREST can't express directly), plus date/amount ranges — always
+-- scoped to one company. Callable via RPC: POST /rest/v1/rpc/search_invoices.
+create or replace function public.search_invoices(
+    p_company_id uuid,
+    p_query      text default null,
+    p_date_from  date default null,
+    p_date_to    date default null,
+    p_min_amount numeric default null,
+    p_max_amount numeric default null
+)
+returns setof public.invoices
+language sql
+stable
+as $$
+    select distinct i.*
+    from public.invoices i
+    left join public.invoice_items it on it.invoice_id = i.id
+    where i.company_id = p_company_id
+      and (p_query is null or p_query = '' or (
+            i.invoice_number ilike '%' || p_query || '%'
+         or i.customer_name  ilike '%' || p_query || '%'
+         or it.description   ilike '%' || p_query || '%'
+      ))
+      and (p_date_from  is null or i.invoice_date >= p_date_from)
+      and (p_date_to    is null or i.invoice_date <= p_date_to)
+      and (p_min_amount is null or i.grand_total  >= p_min_amount)
+      and (p_max_amount is null or i.grand_total  <= p_max_amount)
+    order by i.created_at desc;
+$$;
+
+-- ============ customers ============
+-- A saved customer list per company, so invoices don't need re-typing
+-- customer details every time.
+create table if not exists public.customers (
+    id          uuid primary key default gen_random_uuid(),
+    company_id  uuid        not null references public.companies(id) on delete cascade,
+    name        text        not null,
+    number      text,
+    email       text,
+    gstin       text,
+    address     text,
+    metadata    jsonb       not null default '{}'::jsonb,
+    created_by  uuid        not null references public.users(id) on delete restrict,
+    updated_by  uuid        references public.users(id) on delete set null,
+    created_at  timestamptz not null default now(),
+    updated_at  timestamptz not null default now()
+);
+create index if not exists customers_company_idx on public.customers(company_id);
+
+-- ============ units ============
+-- Company-defined unit types (Kg, Dozen, Pcs, Sets, Kits, Bundle, ...).
+create table if not exists public.units (
+    id           uuid primary key default gen_random_uuid(),
+    company_id   uuid        not null references public.companies(id) on delete cascade,
+    name         text        not null,
+    abbreviation text,
+    created_by   uuid        not null references public.users(id) on delete restrict,
+    created_at   timestamptz not null default now(),
+    unique (company_id, name)
+);
+create index if not exists units_company_idx on public.units(company_id);
+
 -- ============ enquiries (contact form) ============
 create table if not exists public.enquiries (
     id          bigint generated always as identity primary key,
@@ -283,6 +348,8 @@ alter table public.invoice_config  enable row level security;
 alter table public.inventory       enable row level security;
 alter table public.invoices        enable row level security;
 alter table public.invoice_items   enable row level security;
+alter table public.customers       enable row level security;
+alter table public.units           enable row level security;
 alter table public.enquiries       enable row level security;
 
 -- Anyone may submit an enquiry, but nobody can read them with the public key.
