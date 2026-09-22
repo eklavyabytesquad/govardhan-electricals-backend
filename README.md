@@ -15,6 +15,8 @@ otp.py                       sends the "verification code" template webhook
 security.py                  password hashing, tokens, time helpers
 config.py                    env-driven settings (host, port, CORS, TTLs)
 errors.py                    ApiError, shared by server.py and services/
+env.py                       loads .env.local into os.environ (stdlib only, no .env needed in deployment)
+.env.local                   your local Supabase credentials — git-ignored, create this yourself
 db.sql                       full schema — run once in Supabase's SQL Editor for a fresh project
 migrations/
   001_companies.sql          adds companies + company_members onto an existing database
@@ -22,8 +24,14 @@ migrations/
 
 ## Setup
 
-1. Supabase Dashboard -> **SQL Editor** -> paste and run [db.sql](db.sql) (creates `users`, `sessions`, `tokens`, `otp_records`, `companies`, `company_members`, `enquiries`). If you already ran an earlier version of this file, just run it again — every statement is `create table if not exists` / `create index if not exists`, so it only adds what's missing (the new `companies` and `company_members` tables) and won't touch existing data.
-2. In [supabase.py](supabase.py) set `SECRET_KEY` to your Supabase **secret / service_role** key (Project Settings -> API Keys), or set the `SUPABASE_SERVICE_KEY` environment variable. The publishable key alone cannot write to the private tables (Row Level Security) — `python server.py`'s startup line tells you which key type it's using.
+1. Supabase Dashboard -> **SQL Editor** -> paste and run [db.sql](db.sql) (creates `users`, `sessions`, `tokens`, `otp_records`, `companies`, `company_members`, `enquiries`). If you already ran an earlier version of this file, just run it again — every statement is `create table if not exists` / `add column if not exists`, so it only adds what's missing and won't touch existing data.
+2. Create `.env.local` in this folder (git-ignored, never committed) with:
+   ```
+   SUPABASE_URL=https://your-project.supabase.co
+   SUPABASE_PUBLISHABLE_KEY=sb_publishable_...
+   SUPABASE_SECRET_KEY=sb_secret_...
+   ```
+   The secret/service_role key is required — the publishable key alone cannot write to the private tables (Row Level Security). Find both under Project Settings -> API Keys. `python server.py`'s startup line tells you which key type it's actually using.
 3. Run:
 
 ```
@@ -31,6 +39,8 @@ python server.py
 ```
 
 Serves on http://127.0.0.1:8000.
+
+For deployment (Coolify, etc.), set the same variables as real environment variables instead of `.env.local` — [env.py](env.py) prefers real env vars and only falls back to the file, so both work without any code changes.
 
 ## Environment variables
 

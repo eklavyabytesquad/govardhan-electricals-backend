@@ -14,7 +14,7 @@ Endpoints (JSON):
   POST /api/verify-otp       {identifier, otp}              -> {reset_token}
   POST /api/reset-password   {reset_token, new_password}
   POST /api/contact          {name, phone, message, email?}
-  POST /api/companies                {name}                              Bearer token
+  POST /api/companies                {name, gstin?, owner_name?, number?, metadata?}  Bearer token
   GET  /api/companies                —                                   Bearer token
   POST /api/companies/members        {company_id, identifier, role?}     Bearer token
 """
@@ -176,7 +176,10 @@ class Handler(BaseHTTPRequestHandler):
 
     def create_company(self):
         user, _ = auth_service.authenticate(self._bearer())
-        company = company_service.create(user["id"], self._json().get("name"))
+        d = self._json()
+        company = company_service.create(
+            user["id"], d.get("name"), d.get("gstin"), d.get("owner_name"), d.get("number"), d.get("metadata"),
+        )
         return 201, {"company": company}
 
     def list_companies(self):

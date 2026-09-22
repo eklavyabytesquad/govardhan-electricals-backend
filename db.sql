@@ -56,6 +56,10 @@ create index if not exists otp_user_idx on public.otp_records(user_id, purpose, 
 create table if not exists public.companies (
     id          uuid primary key default gen_random_uuid(),
     name        text        not null,
+    gstin       text,                                  -- 15-char Indian GST number, optional
+    owner_name  text,
+    number      text,                                  -- company contact number
+    metadata    jsonb       not null default '{}'::jsonb,  -- free-form extra fields
     created_by  uuid        not null references public.users(id) on delete restrict,
     created_at  timestamptz not null default now(),
     updated_at  timestamptz not null default now()

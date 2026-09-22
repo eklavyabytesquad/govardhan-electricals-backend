@@ -1,12 +1,14 @@
 """Minimal Supabase (PostgREST) client — Python standard library only.
 
-Credentials are set directly in this file (no .env needed).
+Credentials come from environment variables — see .env.local for local dev
+(loaded automatically by `import env` below; git-ignored, never committed) or
+set them as real env vars in Coolify for deployment.
 
 IMPORTANT: the publishable key is meant for browsers and is restricted by Row Level Security.
 db.sql turns RLS on for the private tables (users, sessions, tokens, otp_records) with no public
-policies, so the publishable key can NOT read or write them. For the backend, paste your
-*secret / service_role* key (Supabase Dashboard -> Project Settings -> API Keys) into
-SECRET_KEY below. Never expose that key in the frontend.
+policies, so the publishable key can NOT read or write them. The backend needs
+SUPABASE_SECRET_KEY (Supabase Dashboard -> Project Settings -> API Keys, the
+secret/service_role key). Never expose that key in the frontend.
 """
 import base64
 import json
@@ -15,9 +17,12 @@ import urllib.error
 import urllib.parse
 import urllib.request
 
-SUPABASE_URL = "https://jgzvffdybjvhbwdvgvtq.supabase.co"
-PUBLISHABLE_KEY = "sb_publishable_1r7z61V1bJpTb06VDsbeJg_70LQ0PDy"
-SECRET_KEY = os.environ.get("SUPABASE_SERVICE_KEY", "")  # or paste the secret key here as a string
+import env  # noqa: F401 — loads .env.local into os.environ as a side effect
+
+SUPABASE_URL = os.environ.get("SUPABASE_URL", "")
+PUBLISHABLE_KEY = os.environ.get("SUPABASE_PUBLISHABLE_KEY", "")
+SECRET_KEY = os.environ.get("SUPABASE_SECRET_KEY", "")
+JWKS_URL = os.environ.get("SUPABASE_JWKS_URL", "")  # not consumed yet — this backend uses its own token/session system, not Supabase Auth
 
 API_KEY = SECRET_KEY or PUBLISHABLE_KEY
 
@@ -98,6 +103,8 @@ def check():
     writes (register, login, contact...) will fail. So this checks the key type
     first, then confirms the tables exist.
     """
+    if not SUPABASE_URL or not API_KEY:
+        return False, "Missing SUPABASE_URL / SUPABASE_SECRET_KEY. Set them in .env.local (local) or as env vars (Coolify)."
     if not _is_secret_key(API_KEY):
         return False, (
             "Using the publishable key — writes will be blocked by Row Level Security. "

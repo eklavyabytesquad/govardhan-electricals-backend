@@ -3,6 +3,8 @@ import os
 import re
 from datetime import timedelta
 
+import env  # noqa: F401 — loads .env.local into os.environ as a side effect
+
 HOST = os.environ.get("HOST", "127.0.0.1")
 PORT = int(os.environ.get("PORT", "8000"))
 

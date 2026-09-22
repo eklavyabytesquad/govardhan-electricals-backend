@@ -4,6 +4,8 @@ import os
 import urllib.error
 import urllib.request
 
+import env  # noqa: F401 — loads .env.local into os.environ as a side effect
+
 TEMPLATE_URL = os.environ.get(
     "OTP_TEMPLATE_URL",
     "https://campaignadmin.backendprod.com/webhook/template/88b40b82-5fca-4949-ac37-571432b9b879/process",
