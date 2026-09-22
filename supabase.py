@@ -75,6 +75,17 @@ def insert(table, row):
     return _request("POST", table, body=row, prefer="return=representation")[0]
 
 
+def insert_many(table, rows):
+    if not rows:
+        return []
+    return _request("POST", table, body=rows, prefer="return=representation")
+
+
+def rpc(fn_name, params=None):
+    """Calls a Postgres function exposed by PostgREST (POST /rest/v1/rpc/<fn_name>)."""
+    return _request("POST", f"rpc/{fn_name}", body=params or {})
+
+
 def update(table, filters, values):
     return _request("PATCH", table, filters, values, prefer="return=representation")
 

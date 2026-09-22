@@ -19,7 +19,10 @@ env.py                       loads .env.local into os.environ (stdlib only, no .
 .env.local                   your local Supabase credentials — git-ignored, create this yourself
 db.sql                       full schema — run once in Supabase's SQL Editor for a fresh project
 migrations/
-  001_companies.sql          adds companies + company_members onto an existing database
+  001_companies.sql            adds companies + company_members onto an existing database
+  002_company_details.sql      adds gstin, owner_name, number, metadata to companies
+  003_company_updated_by.sql   adds updated_by to companies
+  004_invoicing.sql            adds inventory, invoice_series, invoice_config, invoices, invoice_items
 ```
 
 ## Setup

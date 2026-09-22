@@ -17,15 +17,34 @@ Endpoints (JSON):
   POST /api/companies                {name, gstin?, owner_name?, number?, metadata?}  Bearer token
   GET  /api/companies                —                                   Bearer token
   POST /api/companies/members        {company_id, identifier, role?}     Bearer token
+
+  POST /api/inventory                {company_id, name, sku?, hsn_code?, unit?, price?, tax_rate?, ...}  Bearer token
+  GET  /api/inventory?company_id=    —                                                                    Bearer token
+  POST /api/inventory/update         {id, company_id, name, ...}                                          Bearer token
+  POST /api/inventory/delete         {id, company_id}                                                     Bearer token
+
+  POST /api/series                   {company_id, name, prefix?, suffix?, padding?, is_default?}  Bearer token
+  GET  /api/series?company_id=       —                                                             Bearer token
+
+  GET  /api/invoice-config?company_id=   —                                              Bearer token
+  POST /api/invoice-config               {company_id, gstin?, address_line1?, bank_name?, ...}  Bearer token
+
+  POST /api/invoices                 {company_id, customer_name, items:[...], series_id? | invoice_number?, ...}  Bearer token
+  GET  /api/invoices?company_id=&status=   —                                                                       Bearer token
+  GET  /api/invoices/get?company_id=&id=   —                                                                       Bearer token
+  POST /api/invoices/status          {company_id, id, status, amount_paid?}                                       Bearer token
 """
 import json
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from urllib.parse import urlparse
+from urllib.parse import parse_qs, urlparse
 
 import supabase
 from config import ALLOWED_ORIGINS, HOST, PORT
 from errors import ApiError
-from services import auth_service, company_service, contact_service
+from services import (
+    auth_service, company_service, contact_service,
+    invoice_config_service, invoice_service, inventory_service, series_service,
+)
 from supabase import SupabaseError
 
 
@@ -82,6 +101,9 @@ class Handler(BaseHTTPRequestHandler):
         auth = self.headers.get("Authorization", "")
         return auth[7:] if auth.startswith("Bearer ") else ""
 
+    def _query(self):
+        return {k: v[0] for k, v in parse_qs(urlparse(self.path).query).items()}
+
     def _dispatch(self, method):
         routes = {
             ("GET", "/api/health"): self.health,
@@ -96,6 +118,18 @@ class Handler(BaseHTTPRequestHandler):
             ("POST", "/api/companies"): self.create_company,
             ("GET", "/api/companies"): self.list_companies,
             ("POST", "/api/companies/members"): self.add_company_member,
+            ("POST", "/api/inventory"): self.create_inventory,
+            ("GET", "/api/inventory"): self.list_inventory,
+            ("POST", "/api/inventory/update"): self.update_inventory,
+            ("POST", "/api/inventory/delete"): self.delete_inventory,
+            ("POST", "/api/series"): self.create_series,
+            ("GET", "/api/series"): self.list_series,
+            ("GET", "/api/invoice-config"): self.get_invoice_config,
+            ("POST", "/api/invoice-config"): self.upsert_invoice_config,
+            ("POST", "/api/invoices"): self.create_invoice,
+            ("GET", "/api/invoices"): self.list_invoices,
+            ("GET", "/api/invoices/get"): self.get_invoice,
+            ("POST", "/api/invoices/status"): self.update_invoice_status,
         }
         try:
             handler = routes.get((method, self.path.split("?")[0].rstrip("/")))
@@ -191,6 +225,96 @@ class Handler(BaseHTTPRequestHandler):
         d = self._json()
         result = company_service.add_member(user["id"], d.get("company_id"), d.get("identifier"), d.get("role", "member"))
         return 201, result
+
+    # -- inventory
+    def create_inventory(self):
+        user, _ = auth_service.authenticate(self._bearer())
+        d = self._json()
+        item = inventory_service.create(
+            user["id"], d.get("company_id"),
+            name=d.get("name"), sku=d.get("sku"), description=d.get("description"),
+            hsn_code=d.get("hsn_code"), unit=d.get("unit"), price=d.get("price"),
+            tax_rate=d.get("tax_rate"), stock_quantity=d.get("stock_quantity"),
+            reorder_level=d.get("reorder_level"), category=d.get("category"), metadata=d.get("metadata"),
+        )
+        return 201, {"item": item}
+
+    def list_inventory(self):
+        user, _ = auth_service.authenticate(self._bearer())
+        company_id = self._query().get("company_id", "")
+        return 200, {"items": inventory_service.list_for_company(user["id"], company_id)}
+
+    def update_inventory(self):
+        user, _ = auth_service.authenticate(self._bearer())
+        d = self._json()
+        item = inventory_service.update(
+            user["id"], d.get("company_id"), d.get("id"),
+            name=d.get("name"), sku=d.get("sku"), description=d.get("description"),
+            hsn_code=d.get("hsn_code"), unit=d.get("unit"), price=d.get("price"),
+            tax_rate=d.get("tax_rate"), stock_quantity=d.get("stock_quantity"),
+            reorder_level=d.get("reorder_level"), category=d.get("category"), metadata=d.get("metadata"),
+        )
+        return 200, {"item": item}
+
+    def delete_inventory(self):
+        user, _ = auth_service.authenticate(self._bearer())
+        d = self._json()
+        inventory_service.delete(user["id"], d.get("company_id"), d.get("id"))
+        return 200, {"ok": True}
+
+    # -- invoice numbering series
+    def create_series(self):
+        user, _ = auth_service.authenticate(self._bearer())
+        d = self._json()
+        series = series_service.create(
+            user["id"], d.get("company_id"), d.get("name"),
+            d.get("prefix", ""), d.get("suffix", ""), d.get("padding", 4), d.get("is_default", False),
+        )
+        return 201, {"series": series}
+
+    def list_series(self):
+        user, _ = auth_service.authenticate(self._bearer())
+        company_id = self._query().get("company_id", "")
+        return 200, {"series": series_service.list_for_company(user["id"], company_id)}
+
+    # -- invoice config (template, legal, GSTIN, address, bank details)
+    def get_invoice_config(self):
+        user, _ = auth_service.authenticate(self._bearer())
+        company_id = self._query().get("company_id", "")
+        return 200, {"config": invoice_config_service.get(user["id"], company_id)}
+
+    def upsert_invoice_config(self):
+        user, _ = auth_service.authenticate(self._bearer())
+        d = self._json()
+        config = invoice_config_service.upsert(user["id"], d.get("company_id"), d)
+        return 200, {"config": config}
+
+    # -- invoices
+    def create_invoice(self):
+        user, _ = auth_service.authenticate(self._bearer())
+        d = self._json()
+        invoice = invoice_service.create(user["id"], d.get("company_id"), d)
+        return 201, {"invoice": invoice}
+
+    def list_invoices(self):
+        user, _ = auth_service.authenticate(self._bearer())
+        q = self._query()
+        invoices = invoice_service.list_for_company(user["id"], q.get("company_id", ""), q.get("status"))
+        return 200, {"invoices": invoices}
+
+    def get_invoice(self):
+        user, _ = auth_service.authenticate(self._bearer())
+        q = self._query()
+        invoice = invoice_service.get_one(user["id"], q.get("company_id", ""), q.get("id", ""))
+        return 200, {"invoice": invoice}
+
+    def update_invoice_status(self):
+        user, _ = auth_service.authenticate(self._bearer())
+        d = self._json()
+        invoice = invoice_service.update_status(
+            user["id"], d.get("company_id"), d.get("id"), d.get("status"), d.get("amount_paid"),
+        )
+        return 200, {"invoice": invoice}
 
 
 if __name__ == "__main__":

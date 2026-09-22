@@ -6,8 +6,23 @@ import supabase
 from errors import ApiError
 
 ROLES = ("owner", "admin", "member")
-COMPANY_COLS = "id,name,gstin,owner_name,number,metadata,created_at"
+# "creator:users!created_by(...)" is a PostgREST embed: it resolves created_by (a user id)
+# into the actual creator's name/username in the same query, instead of a raw uuid.
+COMPANY_COLS = (
+    "id,name,gstin,owner_name,number,metadata,created_at,updated_at,"
+    "created_by,updated_by,creator:users!created_by(name,username)"
+)
 GSTIN_RE = re.compile(r"^[0-9]{2}[A-Z]{5}[0-9]{4}[A-Z][1-9A-Z]Z[0-9A-Z]$")
+
+
+def _with_creator(row):
+    """Flattens the embedded creator object into created_by_name / created_by_username."""
+    creator = row.pop("creator", None)
+    if isinstance(creator, list):
+        creator = creator[0] if creator else None
+    row["created_by_name"] = creator["name"] if creator else None
+    row["created_by_username"] = creator["username"] if creator else None
+    return row
 
 
 def _clean_details(gstin, owner_name, number, metadata):
@@ -54,18 +69,38 @@ def list_for_user(user_id):
     if not memberships:
         return []
     ids = ",".join(m["company_id"] for m in memberships)
-    companies = {c["id"]: c for c in supabase.select("companies", {"id": f"in.({ids})"}, COMPANY_COLS)}
+    rows = supabase.select("companies", {"id": f"in.({ids})"}, COMPANY_COLS)
+    companies = {c["id"]: _with_creator(c) for c in rows}
     return [
         {**companies[m["company_id"]], "role": m["role"], "joined_at": m["joined_at"]}
         for m in memberships if m["company_id"] in companies
     ]
 
 
-def _role_in(user_id, company_id):
+def role_in(user_id, company_id):
     rows = supabase.select(
         "company_members", {"company_id": f"eq.{company_id}", "user_id": f"eq.{user_id}"}, "role", 1
     )
     return rows[0]["role"] if rows else None
+
+
+def require_member(user_id, company_id):
+    """Used by inventory/series/invoice services: any member can view a company's data."""
+    company_id = str(company_id or "")
+    if not company_id:
+        raise ApiError(400, "company_id is required")
+    role = role_in(user_id, company_id)
+    if not role:
+        raise ApiError(403, "You are not a member of this company")
+    return role
+
+
+def require_manager(user_id, company_id):
+    """Used by inventory/series/invoice services: only owner/admin can create or edit."""
+    role = require_member(user_id, company_id)
+    if role not in ("owner", "admin"):
+        raise ApiError(403, "Only an owner or admin of this company can do this")
+    return role
 
 
 def add_member(requester_id, company_id, identifier, role="member"):
@@ -76,13 +111,13 @@ def add_member(requester_id, company_id, identifier, role="member"):
         raise ApiError(400, "company_id is required")
     if role not in ROLES:
         raise ApiError(400, "Role must be owner, admin or member")
-    if _role_in(requester_id, company_id) not in ("owner", "admin"):
+    if role_in(requester_id, company_id) not in ("owner", "admin"):
         raise ApiError(403, "Only an owner or admin of this company can add members")
 
     user = find_user(identifier, cols="id,name,username")
     if not user:
         raise ApiError(404, "No user found with that username or mobile number")
-    if _role_in(user["id"], company_id):
+    if role_in(user["id"], company_id):
         raise ApiError(409, "That user is already a member of this company")
 
     supabase.insert("company_members", {"company_id": company_id, "user_id": user["id"], "role": role})
