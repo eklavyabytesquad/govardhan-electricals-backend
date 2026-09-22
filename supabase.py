@@ -8,6 +8,7 @@ policies, so the publishable key can NOT read or write them. For the backend, pa
 *secret / service_role* key (Supabase Dashboard -> Project Settings -> API Keys) into
 SECRET_KEY below. Never expose that key in the frontend.
 """
+import base64
 import json
 import os
 import urllib.error
@@ -77,11 +78,35 @@ def delete(table, filters):
     return _request("DELETE", table, filters)
 
 
+def _is_secret_key(key):
+    if key.startswith("sb_secret_"):
+        return True
+    if key.startswith("eyJ"):  # legacy JWT-style key
+        try:
+            payload = json.loads(base64.urlsafe_b64decode(key.split(".")[1] + "=="))
+            return payload.get("role") == "service_role"
+        except Exception:
+            return False
+    return False
+
+
 def check():
-    """Startup check: returns (ok, message)."""
+    """Startup check: returns (ok, message).
+
+    RLS makes reads with the public key silently return an empty list instead of
+    an error, which would otherwise look like a successful connection even though
+    writes (register, login, contact...) will fail. So this checks the key type
+    first, then confirms the tables exist.
+    """
+    if not _is_secret_key(API_KEY):
+        return False, (
+            "Using the publishable key — writes will be blocked by Row Level Security. "
+            "Set SECRET_KEY in supabase.py, or the SUPABASE_SERVICE_KEY env var, to your "
+            "Supabase secret/service_role key (Project Settings -> API Keys)."
+        )
     try:
         select("users", columns="id", limit=1)
-        return True, "Supabase connected."
+        return True, "Supabase connected with the secret key."
     except SupabaseError as e:
         if e.code == "PGRST205":
             return False, "Connected to Supabase, but tables are missing. Run db.sql in the SQL Editor."
