@@ -16,6 +16,7 @@ every report automatically.
 | `GET /api/accounting/reports/ledger-balance?company_id=&ledger_id=` | `v_ledger_balance` | Opening balance ± all active-voucher entries, per ledger |
 | `GET /api/accounting/reports/bill-outstanding?company_id=&ledger_id=` | `v_bill_outstanding` | Each `new` bill minus what's been settled `against` it, with `days_overdue` |
 | `GET /api/accounting/reports/sales-profit?company_id=&voucher_id=` | `v_sales_profit` | Per sale line: `(rate - cost_rate) × qty - discount` |
+| `GET /api/accounting/reports/ledger-transactions?company_id=&ledger_id=` | `v_ledger_transactions` (migration 012) | Every active voucher that touched one ledger, dated and in order — the "ledger account" statement. `ledger_id` is required (400 without it). |
 
 All filters besides `company_id` are optional — omit them to get every row
 for the company.

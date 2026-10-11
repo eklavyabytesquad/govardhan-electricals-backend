@@ -30,6 +30,8 @@ declare
   v_prefix             text;
   v_next_number        int;
   v_total              numeric(14,2) := 0;
+  v_debit_total        numeric(14,2) := 0;
+  v_item_count         int := 0;
   v_voucher_id         uuid;
   v_item               jsonb;
   v_entry              jsonb;
@@ -96,6 +98,7 @@ begin
       nullif(v_item->>'cost_rate', '')::numeric
     );
     v_total := v_total + coalesce((v_item->>'line_total')::numeric, 0);
+    v_item_count := v_item_count + 1;
   end loop;
 
   for v_entry in select * from jsonb_array_elements(coalesce(p_payload->'ledger_entries', '[]'::jsonb))
@@ -107,6 +110,7 @@ begin
       coalesce((v_entry->>'debit')::numeric, 0),
       coalesce((v_entry->>'credit')::numeric, 0)
     );
+    v_debit_total := v_debit_total + coalesce((v_entry->>'debit')::numeric, 0);
   end loop;
 
   for v_alloc in select * from jsonb_array_elements(coalesce(p_payload->'bill_allocations', '[]'::jsonb))
@@ -117,14 +121,29 @@ begin
       v_company_id, v_voucher_id,
       (v_alloc->>'ledger_id')::uuid,
       v_alloc->>'ref_type',
-      nullif(v_alloc->>'bill_voucher_id', '')::uuid,
-      v_alloc->>'bill_ref',
+      -- A 'new' bill IS this voucher — the caller can't know this voucher's
+      -- id before it exists, so default to it. Without this, v_bill_outstanding
+      -- (which joins on bill_voucher_id) never matches it, and the bill never
+      -- shows as outstanding or gets settled.
+      case when v_alloc->>'ref_type' = 'new'
+        then coalesce(nullif(v_alloc->>'bill_voucher_id', '')::uuid, v_voucher_id)
+        else nullif(v_alloc->>'bill_voucher_id', '')::uuid
+      end,
+      case when v_alloc->>'ref_type' = 'new'
+        then coalesce(nullif(v_alloc->>'bill_ref', ''), v_voucher_no)
+        else v_alloc->>'bill_ref'
+      end,
       nullif(v_alloc->>'due_date', '')::date,
       coalesce((v_alloc->>'amount')::numeric, 0)
     );
   end loop;
 
-  update public.vouchers set total_amount = v_total where id = v_voucher_id;
+  -- total_amount is a display figure: the sum of item lines for stock
+  -- vouchers, or the sum of debits for pure-money vouchers (payment,
+  -- receipt, journal...) that have no items at all.
+  update public.vouchers
+     set total_amount = case when v_item_count > 0 then v_total else v_debit_total end
+   where id = v_voucher_id;
 
   -- Force the deferred balance trigger to run NOW, inside this same
   -- transaction, so an unbalanced voucher fails loudly right here with a
