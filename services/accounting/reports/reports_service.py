@@ -64,10 +64,15 @@ def sales_profit(user_id, company_id, voucher_id=None):
 
 def ledger_transactions(user_id, company_id, ledger_id):
     """Every active voucher that touched one ledger, dated and in order —
-    the Tally-style "ledger account" statement (migrations/012). The
+    the Tally-style "ledger account" statement (migrations/012, 013). The
     frontend adds the running balance on top of opening_balance/opening_type
     (fetched separately from /api/accounting/ledgers), since that's cheap
-    to do client-side and keeps this view a flat, cacheable list."""
+    to do client-side and keeps this view a flat, cacheable list.
+
+    Sorted by (date, created_at) — NOT (date, voucher_no): voucher_no is
+    text, so "PMT/0001" sorts before "PUR/0001" alphabetically (M < U) even
+    when the purchase was actually entered first. created_at is the real
+    chronological order for same-day entries."""
     require_member(user_id, company_id)
     ledger_id = str(ledger_id or "")
     if not ledger_id:
@@ -75,5 +80,5 @@ def ledger_transactions(user_id, company_id, ledger_id):
     return supabase.select(
         "v_ledger_transactions",
         {"company_id": f"eq.{company_id}", "ledger_id": f"eq.{ledger_id}"},
-        order="date.asc,voucher_no.asc",
+        order="date.asc,created_at.asc",
     )
