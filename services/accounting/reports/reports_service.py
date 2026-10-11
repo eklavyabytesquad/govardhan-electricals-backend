@@ -2,6 +2,7 @@
 from migration 010 (v_stock_balance, v_stock_value, v_batch_expiry,
 v_low_stock, v_ledger_balance, v_bill_outstanding, v_sales_profit). Nothing
 is stored; everything is computed fresh on every call."""
+import datetime
 import supabase
 from errors import ApiError
 from services.company_service import require_member
@@ -81,4 +82,22 @@ def ledger_transactions(user_id, company_id, ledger_id):
         "v_ledger_transactions",
         {"company_id": f"eq.{company_id}", "ledger_id": f"eq.{ledger_id}"},
         order="date.asc,created_at.asc",
+    )
+
+
+def sales_daily(user_id, company_id, days=14):
+    """Daily sales totals for the last N days (migration 014) — the
+    dashboard's "today's sales" tile and trend graph both read this. Days
+    with zero sales simply have no row; the frontend fills the gaps when
+    drawing the chart so every day in the range still gets a bar."""
+    require_member(user_id, company_id)
+    try:
+        days = max(1, min(int(days), 90))
+    except (TypeError, ValueError):
+        days = 14
+    cutoff = (datetime.date.today() - datetime.timedelta(days=days - 1)).isoformat()
+    return supabase.select(
+        "v_sales_daily",
+        {"company_id": f"eq.{company_id}", "date": f"gte.{cutoff}"},
+        order="date.asc",
     )

@@ -191,6 +191,7 @@ class Handler(BaseHTTPRequestHandler):
             ("GET", "/api/accounting/reports/bill-outstanding"): self.report_bill_outstanding,
             ("GET", "/api/accounting/reports/sales-profit"): self.report_sales_profit,
             ("GET", "/api/accounting/reports/ledger-transactions"): self.report_ledger_transactions,
+            ("GET", "/api/accounting/reports/sales-daily"): self.report_sales_daily,
         }
         try:
             handler = routes.get((method, self.path.split("?")[0].rstrip("/")))
@@ -537,6 +538,12 @@ class Handler(BaseHTTPRequestHandler):
         q = self._query()
         rows = reports_service.ledger_transactions(user["id"], q.get("company_id", ""), q.get("ledger_id", ""))
         return 200, {"ledger_transactions": rows}
+
+    def report_sales_daily(self):
+        user, _ = auth_service.authenticate(self._bearer())
+        q = self._query()
+        rows = reports_service.sales_daily(user["id"], q.get("company_id", ""), q.get("days", 14))
+        return 200, {"sales_daily": rows}
 
 
 if __name__ == "__main__":
