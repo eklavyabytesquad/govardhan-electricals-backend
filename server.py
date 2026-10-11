@@ -1,7 +1,9 @@
 """Govardhan Electricals backend — pure Python (standard library only), storage in Supabase.
 
 This file is only the HTTP layer (routing, request/response, CORS). The actual
-logic lives in services/auth_service.py and services/contact_service.py.
+logic lives in services/*.py — see services/accounting/{masters,vouchers,reports}/README.md
+for the full accounting API (financial years, account groups, ledgers, units,
+item groups, items, godowns, batches, voucher types, vouchers, reports).
 
 Run:  python server.py
 Endpoints (JSON):
@@ -19,32 +21,32 @@ Endpoints (JSON):
   POST /api/companies/members        {company_id, identifier, role?}     Bearer token
   POST /api/companies/update         {company_id, name?, gstin?, owner_name?, number?, metadata?}  Bearer token, owner/admin only
 
-  POST /api/inventory                {company_id, name, sku?, hsn_code?, unit?, price?, tax_rate?, image_url?, ...}  Bearer token
-  GET  /api/inventory?company_id=    —                                                                    Bearer token
-  POST /api/inventory/update         {id, company_id, name, ...}                                          Bearer token
-  POST /api/inventory/delete         {id, company_id}                                                     Bearer token
+  Accounting masters (services/accounting/masters/README.md):
+    /api/accounting/financial-years[/close]
+    /api/accounting/account-groups[/update]
+    /api/accounting/ledgers[/update]
+    /api/accounting/units[/update]
+    /api/accounting/item-groups[/update]
+    /api/accounting/items[/update]
+    /api/accounting/godowns[/update]
+    /api/accounting/batches[/update]
+    /api/accounting/voucher-types[/update]
+    /api/accounting/voucher-number-series   GET only
 
-  POST /api/series                   {company_id, name, prefix?, suffix?, padding?, is_default?}  Bearer token
-  GET  /api/series?company_id=       —                                                             Bearer token
+  Accounting vouchers (services/accounting/vouchers/README.md):
+    POST /api/accounting/vouchers              {voucher_type_id, financial_year_id, items?, ledger_entries?, bill_allocations?, ...}
+    GET  /api/accounting/vouchers?company_id=&voucher_type_id=&status=
+    GET  /api/accounting/vouchers/get?company_id=&id=
+    POST /api/accounting/vouchers/cancel       {company_id, id, reason?}
 
-  GET  /api/invoice-config?company_id=   —                                              Bearer token
-  POST /api/invoice-config               {company_id, gstin?, address_line1?, bank_name?, ...}  Bearer token
-
-  POST /api/invoices                 {company_id, customer_name, items:[...], series_id? | invoice_number?, ...}  Bearer token
-  GET  /api/invoices?company_id=&status=   —                                                                       Bearer token
-  GET  /api/invoices/get?company_id=&id=   —                                                                       Bearer token
-  POST /api/invoices/update          {company_id, id, customer_name, items:[...], ...}                            Bearer token — full edit, number/status unchanged
-  POST /api/invoices/status          {company_id, id, status, amount_paid?}                                       Bearer token
-  GET  /api/invoices/search?company_id=&q=&date_from=&date_to=&min_amount=&max_amount=                            Bearer token
-
-  POST /api/customers                {company_id, name, number?, email?, gstin?, address?}  Bearer token
-  GET  /api/customers?company_id=    —                                                       Bearer token
-  POST /api/customers/update         {id, company_id, name, ...}                             Bearer token
-  POST /api/customers/delete         {id, company_id}                                         Bearer token
-
-  POST /api/units                    {company_id, name, abbreviation?}  Bearer token
-  GET  /api/units?company_id=        —                                  Bearer token
-  POST /api/units/delete             {id, company_id}                   Bearer token
+  Accounting reports (services/accounting/reports/README.md):
+    GET /api/accounting/reports/stock-balance?company_id=&item_id=&godown_id=
+    GET /api/accounting/reports/stock-value?company_id=&item_id=
+    GET /api/accounting/reports/batch-expiry?company_id=&item_id=
+    GET /api/accounting/reports/low-stock?company_id=
+    GET /api/accounting/reports/ledger-balance?company_id=&ledger_id=
+    GET /api/accounting/reports/bill-outstanding?company_id=&ledger_id=
+    GET /api/accounting/reports/sales-profit?company_id=&voucher_id=
 """
 import json
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -53,10 +55,14 @@ from urllib.parse import parse_qs, urlparse
 import supabase
 from config import ALLOWED_ORIGINS, HOST, PORT
 from errors import ApiError
-from services import (
-    auth_service, company_service, contact_service, customer_service,
-    invoice_config_service, invoice_service, inventory_service, series_service, units_service,
+from services import auth_service, company_service, contact_service
+from services.accounting.masters import (
+    account_groups_service, batches_service, financial_years_service, godowns_service,
+    item_groups_service, items_service, ledgers_service, units_service,
+    voucher_number_series_service, voucher_types_service,
 )
+from services.accounting.reports import reports_service
+from services.accounting.vouchers import voucher_service
 from supabase import SupabaseError
 
 
@@ -75,7 +81,7 @@ def _origin_allowed(origin):
 
 
 class Handler(BaseHTTPRequestHandler):
-    server_version = "GovardhanAPI/3.0"
+    server_version = "GovardhanAPI/4.0"
 
     # -- plumbing
     def _cors_headers(self):
@@ -131,27 +137,59 @@ class Handler(BaseHTTPRequestHandler):
             ("GET", "/api/companies"): self.list_companies,
             ("POST", "/api/companies/members"): self.add_company_member,
             ("POST", "/api/companies/update"): self.update_company,
-            ("POST", "/api/inventory"): self.create_inventory,
-            ("GET", "/api/inventory"): self.list_inventory,
-            ("POST", "/api/inventory/update"): self.update_inventory,
-            ("POST", "/api/inventory/delete"): self.delete_inventory,
-            ("POST", "/api/series"): self.create_series,
-            ("GET", "/api/series"): self.list_series,
-            ("GET", "/api/invoice-config"): self.get_invoice_config,
-            ("POST", "/api/invoice-config"): self.upsert_invoice_config,
-            ("POST", "/api/invoices"): self.create_invoice,
-            ("GET", "/api/invoices"): self.list_invoices,
-            ("GET", "/api/invoices/get"): self.get_invoice,
-            ("POST", "/api/invoices/status"): self.update_invoice_status,
-            ("POST", "/api/invoices/update"): self.update_invoice,
-            ("GET", "/api/invoices/search"): self.search_invoices,
-            ("POST", "/api/customers"): self.create_customer,
-            ("GET", "/api/customers"): self.list_customers,
-            ("POST", "/api/customers/update"): self.update_customer,
-            ("POST", "/api/customers/delete"): self.delete_customer,
-            ("POST", "/api/units"): self.create_unit,
-            ("GET", "/api/units"): self.list_units,
-            ("POST", "/api/units/delete"): self.delete_unit,
+
+            # -- accounting masters
+            ("POST", "/api/accounting/financial-years"): self.create_financial_year,
+            ("GET", "/api/accounting/financial-years"): self.list_financial_years,
+            ("POST", "/api/accounting/financial-years/close"): self.close_financial_year,
+
+            ("POST", "/api/accounting/account-groups"): self.create_account_group,
+            ("GET", "/api/accounting/account-groups"): self.list_account_groups,
+            ("POST", "/api/accounting/account-groups/update"): self.update_account_group,
+
+            ("POST", "/api/accounting/ledgers"): self.create_ledger,
+            ("GET", "/api/accounting/ledgers"): self.list_ledgers,
+            ("POST", "/api/accounting/ledgers/update"): self.update_ledger,
+
+            ("POST", "/api/accounting/units"): self.create_accounting_unit,
+            ("GET", "/api/accounting/units"): self.list_accounting_units,
+            ("POST", "/api/accounting/units/update"): self.update_accounting_unit,
+
+            ("POST", "/api/accounting/item-groups"): self.create_item_group,
+            ("GET", "/api/accounting/item-groups"): self.list_item_groups,
+            ("POST", "/api/accounting/item-groups/update"): self.update_item_group,
+
+            ("POST", "/api/accounting/items"): self.create_item,
+            ("GET", "/api/accounting/items"): self.list_items,
+            ("POST", "/api/accounting/items/update"): self.update_item,
+
+            ("POST", "/api/accounting/godowns"): self.create_godown,
+            ("GET", "/api/accounting/godowns"): self.list_godowns,
+            ("POST", "/api/accounting/godowns/update"): self.update_godown,
+
+            ("POST", "/api/accounting/batches"): self.create_batch,
+            ("GET", "/api/accounting/batches"): self.list_batches,
+            ("POST", "/api/accounting/batches/update"): self.update_batch,
+
+            ("GET", "/api/accounting/voucher-types"): self.list_voucher_types,
+            ("POST", "/api/accounting/voucher-types/update"): self.update_voucher_type,
+
+            ("GET", "/api/accounting/voucher-number-series"): self.list_voucher_number_series,
+
+            # -- accounting vouchers
+            ("POST", "/api/accounting/vouchers"): self.create_voucher,
+            ("GET", "/api/accounting/vouchers"): self.list_vouchers,
+            ("GET", "/api/accounting/vouchers/get"): self.get_voucher,
+            ("POST", "/api/accounting/vouchers/cancel"): self.cancel_voucher,
+
+            # -- accounting reports
+            ("GET", "/api/accounting/reports/stock-balance"): self.report_stock_balance,
+            ("GET", "/api/accounting/reports/stock-value"): self.report_stock_value,
+            ("GET", "/api/accounting/reports/batch-expiry"): self.report_batch_expiry,
+            ("GET", "/api/accounting/reports/low-stock"): self.report_low_stock,
+            ("GET", "/api/accounting/reports/ledger-balance"): self.report_ledger_balance,
+            ("GET", "/api/accounting/reports/bill-outstanding"): self.report_bill_outstanding,
+            ("GET", "/api/accounting/reports/sales-profit"): self.report_sales_profit,
         }
         try:
             handler = routes.get((method, self.path.split("?")[0].rstrip("/")))
@@ -181,7 +219,7 @@ class Handler(BaseHTTPRequestHandler):
     def log_message(self, fmt, *args):
         print(f"{self.address_string()} - {fmt % args}")
 
-    # -- endpoints (thin: parse request -> call service -> shape response)
+    # -- auth / companies (unchanged)
     def health(self):
         return 200, {"status": "ok"}
 
@@ -257,164 +295,241 @@ class Handler(BaseHTTPRequestHandler):
         result = company_service.add_member(user["id"], d.get("company_id"), d.get("identifier"), d.get("role", "member"))
         return 201, result
 
-    # -- inventory
-    def create_inventory(self):
+    # -- accounting masters: financial years
+    def create_financial_year(self):
         user, _ = auth_service.authenticate(self._bearer())
         d = self._json()
-        item = inventory_service.create(
-            user["id"], d.get("company_id"),
-            name=d.get("name"), sku=d.get("sku"), description=d.get("description"),
-            hsn_code=d.get("hsn_code"), unit=d.get("unit"), price=d.get("price"),
-            tax_rate=d.get("tax_rate"), stock_quantity=d.get("stock_quantity"),
-            reorder_level=d.get("reorder_level"), category=d.get("category"), metadata=d.get("metadata"),
-            image_url=d.get("image_url"),
-        )
-        return 201, {"item": item}
+        fy = financial_years_service.create(user["id"], d.get("company_id"), d.get("name"), d.get("start_date"), d.get("end_date"))
+        return 201, {"financial_year": fy}
 
-    def list_inventory(self):
+    def list_financial_years(self):
         user, _ = auth_service.authenticate(self._bearer())
         company_id = self._query().get("company_id", "")
-        return 200, {"items": inventory_service.list_for_company(user["id"], company_id)}
+        return 200, {"financial_years": financial_years_service.list_for_company(user["id"], company_id)}
 
-    def update_inventory(self):
+    def close_financial_year(self):
         user, _ = auth_service.authenticate(self._bearer())
         d = self._json()
-        item = inventory_service.update(
-            user["id"], d.get("company_id"), d.get("id"),
-            name=d.get("name"), sku=d.get("sku"), description=d.get("description"),
-            hsn_code=d.get("hsn_code"), unit=d.get("unit"), price=d.get("price"),
-            tax_rate=d.get("tax_rate"), stock_quantity=d.get("stock_quantity"),
-            reorder_level=d.get("reorder_level"), category=d.get("category"), metadata=d.get("metadata"),
-            image_url=d.get("image_url"),
+        fy = financial_years_service.close(user["id"], d.get("company_id"), d.get("id"))
+        return 200, {"financial_year": fy}
+
+    # -- accounting masters: account groups
+    def create_account_group(self):
+        user, _ = auth_service.authenticate(self._bearer())
+        d = self._json()
+        group = account_groups_service.create(
+            user["id"], d.get("company_id"), d.get("name"), d.get("parent_id"),
+            d.get("nature"), d.get("affects_gross_profit", False),
         )
-        return 200, {"item": item}
+        return 201, {"account_group": group}
 
-    def delete_inventory(self):
-        user, _ = auth_service.authenticate(self._bearer())
-        d = self._json()
-        inventory_service.delete(user["id"], d.get("company_id"), d.get("id"))
-        return 200, {"ok": True}
-
-    # -- invoice numbering series
-    def create_series(self):
-        user, _ = auth_service.authenticate(self._bearer())
-        d = self._json()
-        series = series_service.create(
-            user["id"], d.get("company_id"), d.get("name"),
-            d.get("prefix", ""), d.get("suffix", ""), d.get("padding", 4), d.get("is_default", False),
-        )
-        return 201, {"series": series}
-
-    def list_series(self):
+    def list_account_groups(self):
         user, _ = auth_service.authenticate(self._bearer())
         company_id = self._query().get("company_id", "")
-        return 200, {"series": series_service.list_for_company(user["id"], company_id)}
+        return 200, {"account_groups": account_groups_service.list_for_company(user["id"], company_id)}
 
-    # -- invoice config (template, legal, GSTIN, address, bank details)
-    def get_invoice_config(self):
+    def update_account_group(self):
+        user, _ = auth_service.authenticate(self._bearer())
+        d = self._json()
+        group = account_groups_service.update(user["id"], d.get("company_id"), d.get("id"), d.get("name"), d.get("parent_id"))
+        return 200, {"account_group": group}
+
+    # -- accounting masters: ledgers
+    def create_ledger(self):
+        user, _ = auth_service.authenticate(self._bearer())
+        d = self._json()
+        ledger = ledgers_service.create(user["id"], d.get("company_id"), d)
+        return 201, {"ledger": ledger}
+
+    def list_ledgers(self):
         user, _ = auth_service.authenticate(self._bearer())
         company_id = self._query().get("company_id", "")
-        return 200, {"config": invoice_config_service.get(user["id"], company_id)}
+        return 200, {"ledgers": ledgers_service.list_for_company(user["id"], company_id)}
 
-    def upsert_invoice_config(self):
+    def update_ledger(self):
         user, _ = auth_service.authenticate(self._bearer())
         d = self._json()
-        config = invoice_config_service.upsert(user["id"], d.get("company_id"), d)
-        return 200, {"config": config}
+        ledger = ledgers_service.update(user["id"], d.get("company_id"), d.get("id"), d)
+        return 200, {"ledger": ledger}
 
-    # -- invoices
-    def create_invoice(self):
+    # -- accounting masters: units
+    def create_accounting_unit(self):
         user, _ = auth_service.authenticate(self._bearer())
         d = self._json()
-        invoice = invoice_service.create(user["id"], d.get("company_id"), d)
-        return 201, {"invoice": invoice}
-
-    def list_invoices(self):
-        user, _ = auth_service.authenticate(self._bearer())
-        q = self._query()
-        invoices = invoice_service.list_for_company(user["id"], q.get("company_id", ""), q.get("status"))
-        return 200, {"invoices": invoices}
-
-    def get_invoice(self):
-        user, _ = auth_service.authenticate(self._bearer())
-        q = self._query()
-        invoice = invoice_service.get_one(user["id"], q.get("company_id", ""), q.get("id", ""))
-        return 200, {"invoice": invoice}
-
-    def update_invoice(self):
-        user, _ = auth_service.authenticate(self._bearer())
-        d = self._json()
-        invoice = invoice_service.update(user["id"], d.get("company_id"), d.get("id"), d)
-        return 200, {"invoice": invoice}
-
-    def update_invoice_status(self):
-        user, _ = auth_service.authenticate(self._bearer())
-        d = self._json()
-        invoice = invoice_service.update_status(
-            user["id"], d.get("company_id"), d.get("id"), d.get("status"), d.get("amount_paid"),
-        )
-        return 200, {"invoice": invoice}
-
-    def search_invoices(self):
-        user, _ = auth_service.authenticate(self._bearer())
-        q = self._query()
-        results = invoice_service.search(
-            user["id"], q.get("company_id", ""), q.get("q"), q.get("date_from"), q.get("date_to"),
-            q.get("min_amount"), q.get("max_amount"),
-        )
-        return 200, {"invoices": results}
-
-    # -- customers
-    def create_customer(self):
-        user, _ = auth_service.authenticate(self._bearer())
-        d = self._json()
-        customer = customer_service.create(
-            user["id"], d.get("company_id"),
-            name=d.get("name"), number=d.get("number"), email=d.get("email"),
-            gstin=d.get("gstin"), address=d.get("address"),
-            default_discount_percent=d.get("default_discount_percent"), metadata=d.get("metadata"),
-        )
-        return 201, {"customer": customer}
-
-    def list_customers(self):
-        user, _ = auth_service.authenticate(self._bearer())
-        company_id = self._query().get("company_id", "")
-        return 200, {"customers": customer_service.list_for_company(user["id"], company_id)}
-
-    def update_customer(self):
-        user, _ = auth_service.authenticate(self._bearer())
-        d = self._json()
-        customer = customer_service.update(
-            user["id"], d.get("company_id"), d.get("id"),
-            name=d.get("name"), number=d.get("number"), email=d.get("email"),
-            gstin=d.get("gstin"), address=d.get("address"),
-            default_discount_percent=d.get("default_discount_percent"), metadata=d.get("metadata"),
-        )
-        return 200, {"customer": customer}
-
-    def delete_customer(self):
-        user, _ = auth_service.authenticate(self._bearer())
-        d = self._json()
-        customer_service.delete(user["id"], d.get("company_id"), d.get("id"))
-        return 200, {"ok": True}
-
-    # -- units
-    def create_unit(self):
-        user, _ = auth_service.authenticate(self._bearer())
-        d = self._json()
-        unit = units_service.create(user["id"], d.get("company_id"), d.get("name"), d.get("abbreviation"))
+        unit = units_service.create(user["id"], d.get("company_id"), d.get("name"), d.get("decimal_places", 0))
         return 201, {"unit": unit}
 
-    def list_units(self):
+    def list_accounting_units(self):
         user, _ = auth_service.authenticate(self._bearer())
         company_id = self._query().get("company_id", "")
         return 200, {"units": units_service.list_for_company(user["id"], company_id)}
 
-    def delete_unit(self):
+    def update_accounting_unit(self):
         user, _ = auth_service.authenticate(self._bearer())
         d = self._json()
-        units_service.delete(user["id"], d.get("company_id"), d.get("id"))
-        return 200, {"ok": True}
+        unit = units_service.update(user["id"], d.get("company_id"), d.get("id"), d.get("name"), d.get("decimal_places"))
+        return 200, {"unit": unit}
+
+    # -- accounting masters: item groups
+    def create_item_group(self):
+        user, _ = auth_service.authenticate(self._bearer())
+        d = self._json()
+        group = item_groups_service.create(user["id"], d.get("company_id"), d.get("name"), d.get("parent_id"))
+        return 201, {"item_group": group}
+
+    def list_item_groups(self):
+        user, _ = auth_service.authenticate(self._bearer())
+        company_id = self._query().get("company_id", "")
+        return 200, {"item_groups": item_groups_service.list_for_company(user["id"], company_id)}
+
+    def update_item_group(self):
+        user, _ = auth_service.authenticate(self._bearer())
+        d = self._json()
+        group = item_groups_service.update(user["id"], d.get("company_id"), d.get("id"), d.get("name"), d.get("parent_id"))
+        return 200, {"item_group": group}
+
+    # -- accounting masters: items
+    def create_item(self):
+        user, _ = auth_service.authenticate(self._bearer())
+        d = self._json()
+        item = items_service.create(user["id"], d.get("company_id"), d)
+        return 201, {"item": item}
+
+    def list_items(self):
+        user, _ = auth_service.authenticate(self._bearer())
+        company_id = self._query().get("company_id", "")
+        return 200, {"items": items_service.list_for_company(user["id"], company_id)}
+
+    def update_item(self):
+        user, _ = auth_service.authenticate(self._bearer())
+        d = self._json()
+        item = items_service.update(user["id"], d.get("company_id"), d.get("id"), d)
+        return 200, {"item": item}
+
+    # -- accounting masters: godowns
+    def create_godown(self):
+        user, _ = auth_service.authenticate(self._bearer())
+        d = self._json()
+        godown = godowns_service.create(user["id"], d.get("company_id"), d.get("name"), d.get("address"), d.get("is_default", False))
+        return 201, {"godown": godown}
+
+    def list_godowns(self):
+        user, _ = auth_service.authenticate(self._bearer())
+        company_id = self._query().get("company_id", "")
+        return 200, {"godowns": godowns_service.list_for_company(user["id"], company_id)}
+
+    def update_godown(self):
+        user, _ = auth_service.authenticate(self._bearer())
+        d = self._json()
+        godown = godowns_service.update(
+            user["id"], d.get("company_id"), d.get("id"), d.get("name"), d.get("address"), d.get("is_default"),
+        )
+        return 200, {"godown": godown}
+
+    # -- accounting masters: batches
+    def create_batch(self):
+        user, _ = auth_service.authenticate(self._bearer())
+        d = self._json()
+        batch = batches_service.create(
+            user["id"], d.get("company_id"), d.get("item_id"), d.get("batch_no"), d.get("mfg_date"), d.get("expiry_date"),
+        )
+        return 201, {"batch": batch}
+
+    def list_batches(self):
+        user, _ = auth_service.authenticate(self._bearer())
+        q = self._query()
+        return 200, {"batches": batches_service.list_for_company(user["id"], q.get("company_id", ""), q.get("item_id"))}
+
+    def update_batch(self):
+        user, _ = auth_service.authenticate(self._bearer())
+        d = self._json()
+        batch = batches_service.update(user["id"], d.get("company_id"), d.get("id"), d.get("mfg_date"), d.get("expiry_date"))
+        return 200, {"batch": batch}
+
+    # -- accounting masters: voucher types + number series
+    def list_voucher_types(self):
+        user, _ = auth_service.authenticate(self._bearer())
+        company_id = self._query().get("company_id", "")
+        return 200, {"voucher_types": voucher_types_service.list_for_company(user["id"], company_id)}
+
+    def update_voucher_type(self):
+        user, _ = auth_service.authenticate(self._bearer())
+        d = self._json()
+        vt = voucher_types_service.update_prefix(user["id"], d.get("company_id"), d.get("id"), d.get("prefix"))
+        return 200, {"voucher_type": vt}
+
+    def list_voucher_number_series(self):
+        user, _ = auth_service.authenticate(self._bearer())
+        q = self._query()
+        series = voucher_number_series_service.list_for_company(user["id"], q.get("company_id", ""), q.get("financial_year_id"))
+        return 200, {"voucher_number_series": series}
+
+    # -- accounting vouchers
+    def create_voucher(self):
+        user, _ = auth_service.authenticate(self._bearer())
+        d = self._json()
+        voucher = voucher_service.create(user["id"], d.get("company_id"), d)
+        return 201, {"voucher": voucher}
+
+    def list_vouchers(self):
+        user, _ = auth_service.authenticate(self._bearer())
+        q = self._query()
+        vouchers = voucher_service.list_for_company(user["id"], q.get("company_id", ""), q.get("voucher_type_id"), q.get("status"))
+        return 200, {"vouchers": vouchers}
+
+    def get_voucher(self):
+        user, _ = auth_service.authenticate(self._bearer())
+        q = self._query()
+        voucher = voucher_service.get_one(user["id"], q.get("company_id", ""), q.get("id", ""))
+        return 200, {"voucher": voucher}
+
+    def cancel_voucher(self):
+        user, _ = auth_service.authenticate(self._bearer())
+        d = self._json()
+        voucher = voucher_service.cancel(user["id"], d.get("company_id"), d.get("id"), d.get("reason"))
+        return 200, {"voucher": voucher}
+
+    # -- accounting reports
+    def report_stock_balance(self):
+        user, _ = auth_service.authenticate(self._bearer())
+        q = self._query()
+        rows = reports_service.stock_balance(user["id"], q.get("company_id", ""), q.get("item_id"), q.get("godown_id"))
+        return 200, {"stock_balance": rows}
+
+    def report_stock_value(self):
+        user, _ = auth_service.authenticate(self._bearer())
+        q = self._query()
+        rows = reports_service.stock_value(user["id"], q.get("company_id", ""), q.get("item_id"))
+        return 200, {"stock_value": rows}
+
+    def report_batch_expiry(self):
+        user, _ = auth_service.authenticate(self._bearer())
+        q = self._query()
+        rows = reports_service.batch_expiry(user["id"], q.get("company_id", ""), q.get("item_id"))
+        return 200, {"batch_expiry": rows}
+
+    def report_low_stock(self):
+        user, _ = auth_service.authenticate(self._bearer())
+        company_id = self._query().get("company_id", "")
+        return 200, {"low_stock": reports_service.low_stock(user["id"], company_id)}
+
+    def report_ledger_balance(self):
+        user, _ = auth_service.authenticate(self._bearer())
+        q = self._query()
+        rows = reports_service.ledger_balance(user["id"], q.get("company_id", ""), q.get("ledger_id"))
+        return 200, {"ledger_balance": rows}
+
+    def report_bill_outstanding(self):
+        user, _ = auth_service.authenticate(self._bearer())
+        q = self._query()
+        rows = reports_service.bill_outstanding(user["id"], q.get("company_id", ""), q.get("ledger_id"))
+        return 200, {"bill_outstanding": rows}
+
+    def report_sales_profit(self):
+        user, _ = auth_service.authenticate(self._bearer())
+        q = self._query()
+        rows = reports_service.sales_profit(user["id"], q.get("company_id", ""), q.get("voucher_id"))
+        return 200, {"sales_profit": rows}
 
 
 if __name__ == "__main__":
