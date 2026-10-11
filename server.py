@@ -21,6 +21,11 @@ Endpoints (JSON):
   POST /api/companies/members        {company_id, identifier, role?}     Bearer token
   POST /api/companies/update         {company_id, name?, gstin?, owner_name?, number?, metadata?}  Bearer token, owner/admin only
 
+  GET  /api/notifications                   ?company_id=          Bearer token
+  GET  /api/notifications/unread-count      ?company_id=          Bearer token
+  POST /api/notifications/read              {company_id, id}      Bearer token
+  POST /api/notifications/read-all          {company_id}          Bearer token
+
   Accounting masters (services/accounting/masters/README.md):
     /api/accounting/financial-years[/close]
     /api/accounting/account-groups[/update]
@@ -55,7 +60,7 @@ from urllib.parse import parse_qs, urlparse
 import supabase
 from config import ALLOWED_ORIGINS, HOST, PORT
 from errors import ApiError
-from services import auth_service, company_service, contact_service
+from services import auth_service, company_service, contact_service, notification_service
 from services.accounting.masters import (
     account_groups_service, batches_service, financial_years_service, godowns_service,
     item_groups_service, items_service, ledgers_service, units_service,
@@ -137,6 +142,11 @@ class Handler(BaseHTTPRequestHandler):
             ("GET", "/api/companies"): self.list_companies,
             ("POST", "/api/companies/members"): self.add_company_member,
             ("POST", "/api/companies/update"): self.update_company,
+
+            ("GET", "/api/notifications"): self.list_notifications,
+            ("GET", "/api/notifications/unread-count"): self.notifications_unread_count,
+            ("POST", "/api/notifications/read"): self.mark_notification_read,
+            ("POST", "/api/notifications/read-all"): self.mark_all_notifications_read,
 
             # -- accounting masters
             ("POST", "/api/accounting/financial-years"): self.create_financial_year,
@@ -296,6 +306,31 @@ class Handler(BaseHTTPRequestHandler):
         d = self._json()
         result = company_service.add_member(user["id"], d.get("company_id"), d.get("identifier"), d.get("role", "member"))
         return 201, result
+
+    # -- notifications
+    def list_notifications(self):
+        user, _ = auth_service.authenticate(self._bearer())
+        q = self._query()
+        rows = notification_service.list_for_user(user["id"], q.get("company_id", ""))
+        return 200, {"notifications": rows}
+
+    def notifications_unread_count(self):
+        user, _ = auth_service.authenticate(self._bearer())
+        q = self._query()
+        count = notification_service.unread_count(user["id"], q.get("company_id", ""))
+        return 200, {"count": count}
+
+    def mark_notification_read(self):
+        user, _ = auth_service.authenticate(self._bearer())
+        d = self._json()
+        row = notification_service.mark_read(user["id"], d.get("company_id"), d.get("id"))
+        return 200, {"notification": row}
+
+    def mark_all_notifications_read(self):
+        user, _ = auth_service.authenticate(self._bearer())
+        d = self._json()
+        result = notification_service.mark_all_read(user["id"], d.get("company_id"))
+        return 200, result
 
     # -- accounting masters: financial years
     def create_financial_year(self):
