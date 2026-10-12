@@ -138,6 +138,7 @@ class Handler(BaseHTTPRequestHandler):
             ("POST", "/api/verify-otp"): self.verify_otp,
             ("POST", "/api/reset-password"): self.reset_password,
             ("POST", "/api/contact"): self.contact,
+            ("GET", "/api/public/invoice"): self.public_invoice,
             ("POST", "/api/companies"): self.create_company,
             ("GET", "/api/companies"): self.list_companies,
             ("POST", "/api/companies/members"): self.add_company_member,
@@ -279,6 +280,12 @@ class Handler(BaseHTTPRequestHandler):
         d = self._json()
         contact_service.submit(d.get("name"), d.get("phone"), d.get("email"), d.get("message"))
         return 201, {"ok": True}
+
+    def public_invoice(self):
+        # No auth on purpose — this is what the QR code on a printed sales
+        # bill opens. See voucher_service.get_public_sale for the scope limits.
+        q = self._query()
+        return 200, voucher_service.get_public_sale(q.get("id", ""))
 
     def create_company(self):
         user, _ = auth_service.authenticate(self._bearer())
