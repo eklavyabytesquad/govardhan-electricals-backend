@@ -139,6 +139,7 @@ def get_public_sale(voucher_id):
         "company": {
             "name": company.get("name"), "gstin": company.get("gstin"),
             "owner_name": company.get("owner_name"), "number": company.get("number"),
+            "logo_url": meta.get("logo_url"),
             "address": meta.get("address"), "city": meta.get("city"),
             "state": meta.get("state"), "pincode": meta.get("pincode"),
             "bank_name": meta.get("bank_name"), "bank_account_name": meta.get("bank_account_name"),
