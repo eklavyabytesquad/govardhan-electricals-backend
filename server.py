@@ -42,6 +42,7 @@ Endpoints (JSON):
     POST /api/accounting/vouchers              {voucher_type_id, financial_year_id, items?, ledger_entries?, bill_allocations?, ...}
     GET  /api/accounting/vouchers?company_id=&voucher_type_id=&status=
     GET  /api/accounting/vouchers/get?company_id=&id=
+    POST /api/accounting/vouchers/update       {company_id, id, items?, ledger_entries?, bill_allocations?, ...}  only an active voucher
     POST /api/accounting/vouchers/cancel       {company_id, id, reason?}
 
   Accounting reports (services/accounting/reports/README.md):
@@ -191,6 +192,7 @@ class Handler(BaseHTTPRequestHandler):
             ("POST", "/api/accounting/vouchers"): self.create_voucher,
             ("GET", "/api/accounting/vouchers"): self.list_vouchers,
             ("GET", "/api/accounting/vouchers/get"): self.get_voucher,
+            ("POST", "/api/accounting/vouchers/update"): self.update_voucher,
             ("POST", "/api/accounting/vouchers/cancel"): self.cancel_voucher,
 
             # -- accounting reports
@@ -525,6 +527,12 @@ class Handler(BaseHTTPRequestHandler):
         user, _ = auth_service.authenticate(self._bearer())
         q = self._query()
         voucher = voucher_service.get_one(user["id"], q.get("company_id", ""), q.get("id", ""))
+        return 200, {"voucher": voucher}
+
+    def update_voucher(self):
+        user, _ = auth_service.authenticate(self._bearer())
+        d = self._json()
+        voucher = voucher_service.update(user["id"], d.get("company_id"), d.get("id"), d)
         return 200, {"voucher": voucher}
 
     def cancel_voucher(self):

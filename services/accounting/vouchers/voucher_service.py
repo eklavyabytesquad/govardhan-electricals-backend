@@ -40,6 +40,23 @@ def create(user_id, company_id, data):
     return get_one(user_id, company_id, result["id"])
 
 
+def update(user_id, company_id, voucher_id, data):
+    """Edits an existing ACTIVE voucher in place (same id/voucher_no) — the
+    update_voucher() RPC (migration 017) deletes and reinserts its items/
+    ledger_entries/bill_allocations inside one transaction, same balancing
+    rules as create(). A cancelled voucher can't be edited — re-enter it."""
+    require_manager(user_id, company_id)
+    voucher_id = str(voucher_id or "")
+    if not voucher_id:
+        raise ApiError(400, "id is required")
+    if not data.get("items") and not data.get("ledger_entries"):
+        raise ApiError(400, "A voucher needs at least one item or ledger entry")
+
+    payload = {**data, "id": voucher_id, "company_id": company_id, "updated_by": user_id}
+    result = supabase.rpc("update_voucher", {"p_payload": payload})
+    return get_one(user_id, company_id, result["id"])
+
+
 def list_for_company(user_id, company_id, voucher_type_id=None, status=None):
     require_member(user_id, company_id)
     filters = {"company_id": f"eq.{company_id}"}
