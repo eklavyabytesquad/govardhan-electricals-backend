@@ -19,7 +19,7 @@ Endpoints (JSON):
   POST /api/companies                {name, gstin?, owner_name?, number?, metadata?}  Bearer token
   GET  /api/companies                —                                   Bearer token
   POST /api/companies/members        {company_id, identifier, role?}     Bearer token
-  POST /api/companies/update         {company_id, name?, gstin?, owner_name?, number?, metadata?}  Bearer token, owner/admin only
+  POST /api/companies/update         {company_id, name?, gstin?, owner_name?, number?, metadata?, pdf_template?}  Bearer token, owner/admin only
 
   GET  /api/notifications                   ?company_id=          Bearer token
   GET  /api/notifications/unread-count      ?company_id=          Bearer token
@@ -304,7 +304,7 @@ class Handler(BaseHTTPRequestHandler):
         d = self._json()
         company = company_service.update(
             user["id"], d.get("company_id"), d.get("name"), d.get("gstin"), d.get("owner_name"),
-            d.get("number"), d.get("metadata"),
+            d.get("number"), d.get("metadata"), d.get("pdf_template"),
         )
         return 200, {"company": company}
 

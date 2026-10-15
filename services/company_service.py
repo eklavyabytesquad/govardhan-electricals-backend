@@ -9,10 +9,15 @@ ROLES = ("owner", "admin", "member")
 # "creator:users!created_by(...)" is a PostgREST embed: it resolves created_by (a user id)
 # into the actual creator's name/username in the same query, instead of a raw uuid.
 COMPANY_COLS = (
-    "id,name,gstin,owner_name,number,metadata,created_at,updated_at,"
+    "id,name,gstin,owner_name,number,metadata,pdf_template,created_at,updated_at,"
     "created_by,updated_by,creator:users!created_by(name,username)"
 )
 GSTIN_RE = re.compile(r"^[0-9]{2}[A-Z]{5}[0-9]{4}[A-Z][1-9A-Z]Z[0-9A-Z]$")
+
+# Keep in sync with the `id`s exported by the frontend's lib/pdfTemplates/*.js.
+# Deliberately not a DB check constraint (migrations/016) so a new template
+# file can be added on the frontend without a migration — just add its id here.
+VALID_PDF_TEMPLATES = ("template1", "template2")
 
 
 def _with_creator(row):
@@ -69,7 +74,7 @@ def create(user_id, name, gstin=None, owner_name=None, number=None, metadata=Non
     return {**company, "role": "owner"}
 
 
-def update(user_id, company_id, name=None, gstin=None, owner_name=None, number=None, metadata=None):
+def update(user_id, company_id, name=None, gstin=None, owner_name=None, number=None, metadata=None, pdf_template=None):
     """Edit an existing company's details. Only an owner/admin may do this — see
     require_manager. There is deliberately no delete()."""
     require_manager(user_id, company_id)
@@ -81,6 +86,10 @@ def update(user_id, company_id, name=None, gstin=None, owner_name=None, number=N
         if not name:
             raise ApiError(400, "Company name is required")
         payload["name"] = name
+    if pdf_template is not None:
+        if pdf_template not in VALID_PDF_TEMPLATES:
+            raise ApiError(400, f"pdf_template must be one of: {', '.join(VALID_PDF_TEMPLATES)}")
+        payload["pdf_template"] = pdf_template
     payload["updated_by"] = user_id
 
     rows = supabase.update("companies", {"id": f"eq.{company_id}"}, payload)
