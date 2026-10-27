@@ -44,6 +44,7 @@ Endpoints (JSON):
     GET  /api/accounting/vouchers/get?company_id=&id=
     POST /api/accounting/vouchers/update       {company_id, id, items?, ledger_entries?, bill_allocations?, ...}  only an active voucher
     POST /api/accounting/vouchers/cancel       {company_id, id, reason?}
+    POST /api/accounting/vouchers/delete       {company_id, id}  only a cancelled voucher — permanent, not reversible
 
   Accounting reports (services/accounting/reports/README.md):
     GET /api/accounting/reports/stock-balance?company_id=&item_id=&godown_id=
@@ -194,6 +195,7 @@ class Handler(BaseHTTPRequestHandler):
             ("GET", "/api/accounting/vouchers/get"): self.get_voucher,
             ("POST", "/api/accounting/vouchers/update"): self.update_voucher,
             ("POST", "/api/accounting/vouchers/cancel"): self.cancel_voucher,
+            ("POST", "/api/accounting/vouchers/delete"): self.delete_voucher,
 
             # -- accounting reports
             ("GET", "/api/accounting/reports/stock-balance"): self.report_stock_balance,
@@ -540,6 +542,12 @@ class Handler(BaseHTTPRequestHandler):
         d = self._json()
         voucher = voucher_service.cancel(user["id"], d.get("company_id"), d.get("id"), d.get("reason"))
         return 200, {"voucher": voucher}
+
+    def delete_voucher(self):
+        user, _ = auth_service.authenticate(self._bearer())
+        d = self._json()
+        result = voucher_service.delete_permanent(user["id"], d.get("company_id"), d.get("id"))
+        return 200, result
 
     # -- accounting reports
     def report_stock_balance(self):

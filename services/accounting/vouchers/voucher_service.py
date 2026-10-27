@@ -91,6 +91,38 @@ def cancel(user_id, company_id, voucher_id, reason=None):
     return get_one(user_id, company_id, voucher_id)
 
 
+def delete_permanent(user_id, company_id, voucher_id):
+    """Permanently removes a CANCELLED voucher — a real SQL DELETE, not
+    just the status flip cancel() does. Safe to do with one plain REST
+    delete (no custom RPC needed): every child row that only ever belonged
+    to this voucher (voucher_items, ledger_entries, its own bill_allocations
+    row, voucher_links) is ON DELETE CASCADE (migration 010), so removing
+    the vouchers row cleans all of it up in the same statement.
+
+    The one thing this can't bypass, on purpose: bill_allocations.bill_voucher_id
+    is ON DELETE RESTRICT, so if some OTHER voucher (a payment/receipt, or a
+    credit/debit note) is settled "against" this one, Postgres itself
+    refuses the delete — cancelling already freed this voucher's own
+    stock/ledger effect (every balance view filters status='active'), so
+    only a genuinely unreferenced voucher can ever be deleted outright."""
+    require_manager(user_id, company_id)
+    voucher_id = str(voucher_id or "")
+    if not voucher_id:
+        raise ApiError(400, "id is required")
+    rows = supabase.select("vouchers", {"id": f"eq.{voucher_id}", "company_id": f"eq.{company_id}"}, "id,status", 1)
+    if not rows:
+        raise ApiError(404, "Voucher not found")
+    if rows[0]["status"] != "cancelled":
+        raise ApiError(400, "Only a cancelled voucher can be permanently deleted — cancel it first.")
+    try:
+        supabase.delete("vouchers", {"id": f"eq.{voucher_id}", "company_id": f"eq.{company_id}"})
+    except supabase.SupabaseError as e:
+        if e.code == "23503":
+            raise ApiError(409, "Can't delete — another voucher (a payment, credit/debit note, etc.) is settled against this bill. Undo or delete that one first.")
+        raise
+    return {"id": voucher_id, "deleted": True}
+
+
 def get_public_sale(voucher_id):
     """NO auth — backs the public /invoice/<id> page and the QR code printed
     on sales bills. A voucher's id is effectively a random, unguessable
