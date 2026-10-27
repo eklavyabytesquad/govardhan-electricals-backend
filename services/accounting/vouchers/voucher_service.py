@@ -115,6 +115,17 @@ def delete_permanent(user_id, company_id, voucher_id):
     if rows[0]["status"] != "cancelled":
         raise ApiError(400, "Only a cancelled voucher can be permanently deleted — cancel it first.")
     try:
+        # Every sale/purchase creates its OWN "new" bill_allocations row,
+        # which self-references this same voucher on both FK columns
+        # (voucher_id = this voucher, AND bill_voucher_id = this voucher).
+        # Deleting the vouchers row would cascade that row away via
+        # voucher_id — but the bill_voucher_id RESTRICT check fires first
+        # and sees that same row still pointing at this voucher, so it
+        # blocks the delete even when nothing else actually depends on it.
+        # Removing this voucher's own bill_allocations rows explicitly,
+        # first, leaves only genuinely OTHER vouchers' rows (if any) to
+        # trip the RESTRICT check below.
+        supabase.delete("bill_allocations", {"voucher_id": f"eq.{voucher_id}", "company_id": f"eq.{company_id}"})
         supabase.delete("vouchers", {"id": f"eq.{voucher_id}", "company_id": f"eq.{company_id}"})
     except supabase.SupabaseError as e:
         if e.code == "23503":
