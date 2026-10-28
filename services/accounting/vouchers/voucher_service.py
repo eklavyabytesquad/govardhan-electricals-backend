@@ -114,6 +114,22 @@ def delete_permanent(user_id, company_id, voucher_id):
         raise ApiError(404, "Voucher not found")
     if rows[0]["status"] != "cancelled":
         raise ApiError(400, "Only a cancelled voucher can be permanently deleted — cancel it first.")
+
+    # Look up anything else still settled against this bill BEFORE
+    # attempting the delete, so the error can name it — e.g. "RCT/0001,
+    # RCT/0002 are settled against this bill" — instead of the generic
+    # "another voucher" a raw FK-violation message would otherwise give.
+    # This is what blocks deleting a sales invoice from the Sales page
+    # over a receipt that lives on the Payments page with no visible link
+    # between the two in the UI otherwise.
+    allocations = supabase.select("bill_allocations", {"bill_voucher_id": f"eq.{voucher_id}"}, "voucher_id")
+    blocker_ids = sorted({a["voucher_id"] for a in allocations if a["voucher_id"] != voucher_id})
+    if blocker_ids:
+        blockers = supabase.select("vouchers", {"id": f"in.({','.join(blocker_ids)})"}, "voucher_no")
+        names = ", ".join(b["voucher_no"] for b in blockers) or "another voucher"
+        verb = "is" if len(blockers) == 1 else "are"
+        raise ApiError(409, f"Can't delete — {names} {verb} settled against this bill. Delete {'it' if len(blockers) == 1 else 'those'} first, then this one.")
+
     try:
         # Every sale/purchase creates its OWN "new" bill_allocations row,
         # which self-references this same voucher on both FK columns
@@ -123,8 +139,7 @@ def delete_permanent(user_id, company_id, voucher_id):
         # and sees that same row still pointing at this voucher, so it
         # blocks the delete even when nothing else actually depends on it.
         # Removing this voucher's own bill_allocations rows explicitly,
-        # first, leaves only genuinely OTHER vouchers' rows (if any) to
-        # trip the RESTRICT check below.
+        # first, avoids tripping that on itself.
         supabase.delete("bill_allocations", {"voucher_id": f"eq.{voucher_id}", "company_id": f"eq.{company_id}"})
         supabase.delete("vouchers", {"id": f"eq.{voucher_id}", "company_id": f"eq.{company_id}"})
     except supabase.SupabaseError as e:
