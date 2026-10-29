@@ -15,7 +15,7 @@ VOUCHER_COLS = (
 )
 ITEM_COLS = (
     "id,voucher_id,line_no,item_id,godown_id,batch_id,qty_in,qty_out,rate,discount_amount,"
-    "taxable_amount,gst_rate,cgst,sgst,igst,cess,line_total,cost_rate"
+    "taxable_amount,gst_rate,cgst,sgst,igst,cess,line_total,cost_rate,gst_inclusive"
 )
 ENTRY_COLS = "id,voucher_id,ledger_id,debit,credit"
 ALLOC_COLS = "id,voucher_id,ledger_id,ref_type,bill_voucher_id,bill_ref,due_date,amount"
@@ -36,7 +36,14 @@ def create(user_id, company_id, data):
         raise ApiError(400, "A voucher needs at least one item or ledger entry")
 
     payload = {**data, "company_id": company_id, "created_by": user_id}
-    result = supabase.rpc("save_voucher", {"p_payload": payload})
+    try:
+        result = supabase.rpc("save_voucher", {"p_payload": payload})
+    except supabase.SupabaseError as e:
+        # vouchers_unique_number_key (migration 010) — the caller picked an
+        # explicit voucher_no (manual numbering) that's already taken.
+        if e.code == "23505" or "vouchers_unique_number_key" in (e.message or ""):
+            raise ApiError(409, f"Voucher number \"{data.get('voucher_no')}\" is already used — pick a different number, or clear it to auto-number.")
+        raise
     return get_one(user_id, company_id, result["id"])
 
 
